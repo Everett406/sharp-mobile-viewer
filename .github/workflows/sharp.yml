@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -42,21 +44,43 @@ jobs:
           cd /tmp/ml-sharp
           pip install -r requirements.txt
 
-      - name: Verify input image
+      - name: Verify input image (with retry)
         run: |
           INPUT_FILE="jobs/input_${{ inputs.job_id }}.jpg"
+          
+          # Retry loop: the Contents API commit may not have propagated yet
+          for i in 1 2 3 4 5 6; do
+            if [ -f "$INPUT_FILE" ]; then
+              FILE_SIZE=$(stat -c%s "$INPUT_FILE" 2>/dev/null || echo 0)
+              echo "Found input file: $FILE_SIZE bytes"
+              if [ "$FILE_SIZE" -lt 100 ]; then
+                echo "ERROR: File too small ($FILE_SIZE bytes), retrying..."
+              else
+                echo "Input image verified: $FILE_SIZE bytes"
+                break
+              fi
+            else
+              echo "Attempt $i: File not found yet, pulling latest..."
+              git pull origin main 2>/dev/null || true
+            fi
+            sleep 5
+          done
+          
           if [ ! -f "$INPUT_FILE" ]; then
-            echo "ERROR: Input file not found: $INPUT_FILE"
-            echo "Error: Input image not found in repo" > ${{ inputs.job_id }}.error.txt
+            echo "ERROR: Input file not found after retries: $INPUT_FILE"
+            echo "Listing jobs/ directory:"
+            ls -la jobs/ 2>/dev/null || echo "jobs/ directory does not exist"
+            echo "Error: Input image not found in repo after 6 retries" > ${{ inputs.job_id }}.error.txt
             exit 1
           fi
+          
           FILE_SIZE=$(stat -c%s "$INPUT_FILE" 2>/dev/null || echo 0)
-          echo "Input file size: $FILE_SIZE bytes"
           if [ "$FILE_SIZE" -lt 100 ]; then
             echo "ERROR: Input image is too small ($FILE_SIZE bytes)"
             echo "Error: Input image is empty or corrupted" > ${{ inputs.job_id }}.error.txt
             exit 1
           fi
+          
           mkdir -p ${{ github.workspace }}/jobs/${{ inputs.job_id }}/output
 
       - name: Run SHARP inference (CPU)
@@ -75,7 +99,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Ensure release exists
           gh release create ${{ env.RELEASE_TAG }} --title "SHARP Splat Jobs" --notes "Auto-generated" --prerelease 2>/dev/null || true
 
           PLY_FILE=$(find jobs/${{ inputs.job_id }}/output -name "*.ply" | head -1)
@@ -117,6 +140,6 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git rm "$INPUT_FILE"
             git commit -m "cleanup: remove input_${{ inputs.job_id }}.jpg"
-            git push
+            git push || echo "Push failed, file may already be removed"
             echo "Cleaned up input file"
           fi

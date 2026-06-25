@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.3.1';
+const APP_VERSION = '0.3.2';
 
 const App = {
   currentPage: 'welcome',
@@ -322,13 +322,16 @@ const JobManager = {
               ${job.plySize ? formatBytes(job.plySize) + ' PLY' : formatBytes(job.compressedSize) + ' 图片'}
             </p>
           </div>
-          <div class="shrink-0">
+          <div class="shrink-0 flex items-center gap-1.5">
             ${isActive
               ? `<button class="btn secondary" style="min-height:32px;padding:0 12px;font-size:12px;border-radius:10px" data-action="resume">查看进度</button>`
               : job.status === 'completed'
                 ? `<button class="btn primary" style="min-height:32px;padding:0 12px;font-size:12px;border-radius:10px" data-action="view">查看 3D</button>`
                 : `<button class="btn secondary" style="min-height:32px;padding:0 12px;font-size:12px;border-radius:10px" data-action="retry">重试</button>`
             }
+            <button class="inline-flex items-center justify-center w-8 h-8 rounded-lg shrink-0" data-action="delete" style="color:var(--muted-foreground);background:none;border:none;cursor:pointer">
+              <i data-lucide="trash-2" class="w-4 h-4"></i>
+            </button>
           </div>
         </div>`;
     }).join('');
@@ -346,10 +349,11 @@ const JobManager = {
         if (action === 'resume') {
           this.resumeJob(jobId);
         } else if (action === 'view') {
-          // Phase 4: open viewer with PLY
           showToast('3D 查看器将在 Phase 4 实现');
         } else if (action === 'retry') {
           this.retryJob(jobId);
+        } else if (action === 'delete') {
+          this.deleteJob(jobId);
         }
       });
 
@@ -359,6 +363,47 @@ const JobManager = {
         }
       });
     });
+  },
+
+  async deleteJob(jobId) {
+    const job = this.get(jobId);
+    if (!job) return;
+
+    const isActive = ['uploading','dispatching','running','downloading'].includes(job.status);
+    const isCompleted = job.status === 'completed';
+
+    // Build confirmation message
+    let confirmMsg = '确定删除这条记录？';
+    if (isActive) {
+      confirmMsg = '确定停止并删除这条记录？正在进行的推理将被取消。';
+    } else if (isCompleted && job.plySize) {
+      confirmMsg = `确定删除？将清除本地缓存的 PLY 文件（${formatBytes(job.plySize)}）。`;
+    }
+
+    if (!confirm(confirmMsg)) return;
+
+    // Stop polling if this is the active job
+    if (isActive && App.currentJobId === jobId) {
+      if (App.pollTimer) { clearInterval(App.pollTimer); App.pollTimer = null; }
+      if (App.displayTimer) { clearInterval(App.displayTimer); App.displayTimer = null; }
+    }
+
+    // Clear local PLY cache if downloaded
+    if (isCompleted) {
+      try {
+        await Storage.remove(`ply_${jobId}`);
+      } catch (e) {
+        console.log('No PLY cache to remove:', e);
+      }
+    }
+
+    // Remove from job list
+    App.jobs = App.jobs.filter(j => j.id !== jobId);
+    await this.saveAll();
+
+    // Refresh UI
+    this.renderHistoryList();
+    showToast('已删除');
   },
 
   resumeJob(jobId) {
@@ -948,7 +993,12 @@ async function handleJobComplete(plyAsset) {
 
     if (!plyAsset) {
       JobManager.update(App.currentJobId, { status: 'failed', errorLog: '未找到 PLY 文件' });
-      ErrorPage.show('DOWNLOAD_FAILED', '未找到 PLY 文件，推理可能尚未完成');
+      if (App.currentPage === 'status') {
+        ErrorPage.show('DOWNLOAD_FAILED', '未找到 PLY 文件，推理可能尚未完成');
+      } else {
+        showToast('推理失败：未找到 PLY 文件');
+        JobManager.renderHistoryList();
+      }
       return;
     }
 
@@ -963,6 +1013,19 @@ async function handleJobComplete(plyAsset) {
     App.currentPlyBlob = plyBlob;
     App.currentPlySize = plySize;
 
+    // Store PLY in localStorage for persistence (Phase 4 will use IndexedDB)
+    try {
+      // Store as base64 for now (PLY files are small from SHARP)
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result.split(',')[1];
+        Storage.set(`ply_${App.currentJobId}`, base64);
+      };
+      reader.readAsDataURL(plyBlob);
+    } catch (e) {
+      console.log('Could not cache PLY:', e);
+    }
+
     // Mark job as completed
     JobManager.update(App.currentJobId, {
       status: 'completed',
@@ -974,15 +1037,20 @@ async function handleJobComplete(plyAsset) {
       updateStepStatus(5, 'done', '就绪');
       if (window.lucide) lucide.createIcons();
       showToast('3D 场景生成成功！');
+    } else {
+      showToast('3D 场景生成成功！');
+      JobManager.renderHistoryList();
     }
-
-    // Refresh history if on home
-    if (App.currentPage === 'home') JobManager.renderHistoryList();
 
   } catch (e) {
     const code = (e instanceof GitHubError) ? e.code : 'DOWNLOAD_FAILED';
     JobManager.update(App.currentJobId, { status: 'failed', errorLog: e.message });
-    ErrorPage.show(code, e.message);
+    if (App.currentPage === 'status') {
+      ErrorPage.show(code, e.message);
+    } else {
+      showToast('下载失败：' + e.message);
+      JobManager.renderHistoryList();
+    }
   }
 }
 
@@ -1001,10 +1069,21 @@ async function handleJobError(errorAsset) {
     }
 
     JobManager.update(App.currentJobId, { status: 'failed', errorLog });
-    ErrorPage.show('JOB_FAILED', errorLog);
+
+    if (App.currentPage === 'status') {
+      ErrorPage.show('JOB_FAILED', errorLog);
+    } else {
+      showToast('推理失败');
+      JobManager.renderHistoryList();
+    }
   } catch (e) {
     JobManager.update(App.currentJobId, { status: 'failed', errorLog: '推理失败，无法获取详细日志' });
-    ErrorPage.show('JOB_FAILED', '推理失败，无法获取详细日志');
+    if (App.currentPage === 'status') {
+      ErrorPage.show('JOB_FAILED', '推理失败，无法获取详细日志');
+    } else {
+      showToast('推理失败');
+      JobManager.renderHistoryList();
+    }
   }
 }
 
