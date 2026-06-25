@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.4.1';
 
 const App = {
   currentPage: 'welcome',
@@ -22,6 +22,8 @@ const App = {
   currentPlyBlob: null,
   currentPlySize: 0,
   currentViewJobId: null,
+  viewerModuleLoaded: false,
+  viewerModuleLoading: null,
   viewerSettings: {
     bgColor: '#2b2928',
     fov: 75,
@@ -672,7 +674,7 @@ function setupEventListeners() {
 
   // ── Viewer page ──
   document.getElementById('viewer-back')?.addEventListener('click', () => {
-    window.dispatchEvent(new Event('sharpview:dispose'));
+    if (App.viewerModuleLoaded) window.dispatchEvent(new Event('sharpview:dispose'));
     Router.navigate('home');
   });
   document.getElementById('viewer-settings-btn')?.addEventListener('click', () => {
@@ -683,7 +685,7 @@ function setupEventListeners() {
     document.getElementById('viewer-settings-overlay').style.display = 'none';
   });
   document.getElementById('viewer-reset')?.addEventListener('click', () => {
-    window.dispatchEvent(new Event('sharpview:reset-view'));
+    if (App.viewerModuleLoaded) window.dispatchEvent(new Event('sharpview:reset-view'));
     showToast('视角已重置');
   });
   document.getElementById('viewer-download')?.addEventListener('click', () => {
@@ -833,6 +835,14 @@ async function handleLoadPly() {
     document.getElementById('viewer-placeholder').style.display = 'none';
     Router.navigate('viewer');
 
+    // Load viewer module (Spark + Three.js from CDN) if not yet loaded
+    try {
+      await ensureViewerModule();
+    } catch (e) {
+      showToast('3D 渲染器加载失败，请检查网络');
+      return;
+    }
+
     // Read file as ArrayBuffer and dispatch to viewer
     const arrayBuffer = await file.arrayBuffer();
     window.dispatchEvent(new CustomEvent('sharpview:load-ply', {
@@ -866,10 +876,24 @@ async function viewJob3D(jobId) {
 
   Router.navigate('viewer');
 
+  // Load viewer module (Spark + Three.js from CDN) in parallel with PLY data
+  const modulePromise = ensureViewerModule().catch(e => {
+    console.error('Viewer module load failed:', e);
+    placeholder.innerHTML = `
+      <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center" style="background:rgba(255,255,255,0.1)">
+        <i data-lucide="alert-triangle" class="w-8 h-8" style="color:rgba(255,255,255,0.4)"></i>
+      </div>
+      <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.5);margin:0 0 4px 0">3D 渲染器加载失败</p>
+      <p style="font:400 12px var(--font-sans);color:rgba(255,255,255,0.3);margin:0">请检查网络连接后重试</p>`;
+    if (window.lucide) lucide.createIcons();
+    return false;
+  });
+
   // If we already have the PLY blob in memory (just downloaded), use it directly
   if (App.currentPlyBlob && App.currentPlySize > 0) {
     try {
       const arrayBuffer = await App.currentPlyBlob.arrayBuffer();
+      if (!(await modulePromise)) return;
       window.dispatchEvent(new CustomEvent('sharpview:load-ply', {
         detail: { arrayBuffer, fileName: `${jobId}.ply` }
       }));
@@ -887,6 +911,7 @@ async function viewJob3D(jobId) {
       // Convert base64 to ArrayBuffer
       const arrayBuffer = base64ToArrayBuffer(cached);
       App.currentPlySize = arrayBuffer.byteLength;
+      if (!(await modulePromise)) return;
       window.dispatchEvent(new CustomEvent('sharpview:load-ply', {
         detail: { arrayBuffer, fileName: `${jobId}.ply` }
       }));
@@ -940,6 +965,7 @@ async function viewJob3D(jobId) {
     }
 
     const arrayBuffer = await plyBlob.arrayBuffer();
+    if (!(await modulePromise)) return;
     window.dispatchEvent(new CustomEvent('sharpview:load-ply', {
       detail: { arrayBuffer, fileName: `${jobId}.ply` }
     }));
@@ -1364,9 +1390,35 @@ function showConfirm(title, message) {
 // ═══════════════════════════════════════════════════════════
 
 /**
+ * Dynamically load the viewer.js ES module (Spark + Three.js from CDN).
+ * Only loaded when the user actually opens the 3D viewer, so it doesn't
+ * block app initialization or the welcome page buttons.
+ */
+async function ensureViewerModule() {
+  if (App.viewerModuleLoaded) return;
+  if (App.viewerModuleLoading) return App.viewerModuleLoading;
+
+  App.viewerModuleLoading = (async () => {
+    try {
+      // Dynamic import uses the importmap defined in index.html
+      const module = await import('./viewer.js');
+      window.SharpViewViewer = module.default || module.SharpViewViewer || window.SharpViewViewer;
+      App.viewerModuleLoaded = true;
+      console.log('Viewer module loaded dynamically');
+    } catch (e) {
+      console.error('Failed to load viewer module:', e);
+      throw e;
+    }
+  })();
+
+  return App.viewerModuleLoading;
+}
+
+/**
  * Dispatch viewer settings to the viewer module.
  */
 function dispatchViewerSettings() {
+  if (!App.viewerModuleLoaded) return;
   window.dispatchEvent(new CustomEvent('sharpview:apply-settings', {
     detail: { ...App.viewerSettings }
   }));
@@ -1440,7 +1492,7 @@ async function deleteCurrentViewerCache() {
   }
   App.currentPlyBlob = null;
   App.currentPlySize = 0;
-  window.dispatchEvent(new Event('sharpview:dispose'));
+  if (App.viewerModuleLoaded) window.dispatchEvent(new Event('sharpview:dispose'));
   showToast('已删除本地缓存');
   Router.navigate('home');
   JobManager.renderHistoryList();

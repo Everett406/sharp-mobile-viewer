@@ -261,6 +261,10 @@ const Viewer = {
 // Export to window for app.js access
 window.SharpViewViewer = Viewer;
 
+// Also export as ES module (for dynamic import())
+export { Viewer as SharpViewViewer };
+export default Viewer;
+
 // Listen for events from app.js
 window.addEventListener('sharpview:load-ply', (e) => {
   const { arrayBuffer, fileName } = e.detail;
