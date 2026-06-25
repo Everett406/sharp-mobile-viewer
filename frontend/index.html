@@ -8,6 +8,7 @@
   <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="styles/theme.css">
   <link rel="stylesheet" href="styles/components.css">
+  <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js" defer></script>
   <style>
     * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
@@ -29,9 +30,12 @@
       background: var(--bg-100);
       position: relative;
     }
-    .status-bar-spacer { height: env(safe-area-inset-top, 0px); }
+    .status-bar-spacer { height: env(safe-area-inset-top, 0px); min-height: 0px; }
     .content-area { flex: 1; overflow-y: auto; }
     .bottom-safe-area { height: env(safe-area-inset-bottom, 0px); background: var(--popover); }
+    .page { display: none; flex-direction: column; flex: 1; min-height: 0; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-100); z-index: 10; }
+    .page.active { display: flex; }
+    .page.tab-page { position: relative; z-index: 1; }
   </style>
 </head>
 <body>
@@ -40,7 +44,7 @@
     <!-- ═══════════════════════════════════════════════════════
          Page: 欢迎引导页 (Welcome)
          ═══════════════════════════════════════════════════════ -->
-    <div id="page-welcome" class="page">
+    <div id="page-welcome" class="page active">
       <div class="status-bar-spacer"></div>
       <header class="flex items-center px-5 py-3">
         <h1 class="text-[20px] font-medium" style="font-family:var(--font-display);color:var(--foreground)">SharpView</h1>
@@ -79,7 +83,7 @@
     <!-- ═══════════════════════════════════════════════════════
          Page: 首页 (Home)
          ═══════════════════════════════════════════════════════ -->
-    <div id="page-home" class="page">
+    <div id="page-home" class="page tab-page">
       <div class="status-bar-spacer"></div>
       <header class="flex items-center justify-between px-5 py-3">
         <h1 class="text-xl font-semibold tracking-tight" style="font-family:var(--font-display);color:var(--foreground)">SharpView</h1>
@@ -108,7 +112,13 @@
           <p class="text-xs font-semibold tracking-widest uppercase" style="font-family:var(--font-serif);color:var(--muted-foreground);letter-spacing:.12em">最近生成</p>
         </div>
         <div id="home-history-list" class="flex flex-col gap-3">
-          <p class="text-sm text-center py-8" style="color:var(--muted-foreground)">暂无生成记录</p>
+          <div class="text-center py-12">
+            <div class="inline-flex items-center justify-center w-12 h-12 mb-3 rounded-full" style="background:var(--muted)">
+              <i data-lucide="image-off" class="w-6 h-6" style="color:var(--muted-foreground)"></i>
+            </div>
+            <p class="text-sm" style="color:var(--muted-foreground)">暂无生成记录</p>
+            <p class="text-xs mt-1" style="color:var(--muted-foreground)">选择图片开始你的第一个 3D 场景</p>
+          </div>
         </div>
       </div>
     </div>
@@ -116,7 +126,7 @@
     <!-- ═══════════════════════════════════════════════════════
          Page: 设置 (Settings)
          ═══════════════════════════════════════════════════════ -->
-    <div id="page-settings" class="page">
+    <div id="page-settings" class="page tab-page">
       <div class="status-bar-spacer"></div>
       <header class="flex items-center justify-between px-5 py-3">
         <button id="settings-back" class="inline-flex items-center justify-center w-9 h-9 rounded-lg" style="color:var(--foreground);background:none;border:none;cursor:pointer">
@@ -293,6 +303,288 @@
         <footer class="flex flex-col items-center pt-4 pb-10 px-6">
           <p style="font:400 11px var(--font-sans);color:var(--muted-foreground);margin:0 0 4px 0">&copy; 2025 SharpView Team</p>
         </footer>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
+         Page: 图片预览确认页 (Preview)
+         ═══════════════════════════════════════════════════════ -->
+    <div id="page-preview" class="page">
+      <div class="status-bar-spacer"></div>
+      <header class="flex items-center justify-between px-4 h-11" style="border-bottom:1px solid var(--border)">
+        <button id="preview-back" class="inline-flex items-center justify-center w-8 h-8 rounded-lg" style="color:var(--foreground);background:none;border:none;cursor:pointer">
+          <i data-lucide="arrow-left" class="w-5 h-5"></i>
+        </button>
+        <span style="font-family:var(--font-sans);font-weight:600;font-size:16px;color:var(--foreground)">预览图片</span>
+        <button id="preview-reselect" class="inline-flex items-center justify-center w-8 h-8 rounded-lg" style="color:var(--primary);background:none;border:none;cursor:pointer">
+          <i data-lucide="refresh-cw" class="w-5 h-5"></i>
+        </button>
+      </header>
+      <div class="flex-1 overflow-y-auto no-scrollbar px-5 pb-6">
+        <!-- 图片预览 -->
+        <div class="mt-4 mb-4 rounded-2xl overflow-hidden" style="background:var(--bg-300);aspect-ratio:1">
+          <img id="preview-image" src="" alt="预览" class="w-full h-full object-contain" style="display:none">
+          <div id="preview-placeholder" class="w-full h-full flex items-center justify-center">
+            <i data-lucide="image" class="w-12 h-12" style="color:var(--muted-foreground)"></i>
+          </div>
+        </div>
+        <!-- 图片信息 -->
+        <div class="settings-card mb-4">
+          <div class="setting-row py-2" style="border-bottom:1px solid var(--border)">
+            <span style="font:500 12px var(--font-sans);color:var(--muted-foreground)">原始尺寸</span>
+            <span id="preview-original-size" style="font:500 13px var(--font-sans);color:var(--foreground)">--</span>
+          </div>
+          <div class="setting-row py-2" style="border-bottom:1px solid var(--border)">
+            <span style="font:500 12px var(--font-sans);color:var(--muted-foreground)">压缩后大小</span>
+            <span id="preview-compressed-size" style="font:500 13px var(--font-sans);color:var(--foreground)">--</span>
+          </div>
+          <div class="setting-row py-2">
+            <span style="font:500 12px var(--font-sans);color:var(--muted-foreground)">分辨率</span>
+            <span id="preview-resolution" style="font:500 13px var(--font-sans);color:var(--foreground)">--</span>
+          </div>
+        </div>
+        <!-- 提示 -->
+        <div class="flex items-start gap-2 mb-4 p-3 rounded-xl" style="background:var(--brand-50)">
+          <i data-lucide="info" class="w-4 h-4 mt-0.5 shrink-0" style="color:var(--brand-600)"></i>
+          <p style="font:400 12px/1.5 var(--font-sans);color:var(--brand-700)">生成 3D 场景需要 5-15 分钟（CPU 推理），首次运行还需下载 2.44GB 模型。生成完成后会自动下载到本地。</p>
+        </div>
+        <!-- 操作按钮 -->
+        <button id="preview-start" class="btn primary w-full flex items-center justify-center gap-2" style="min-height:48px;border-radius:16px;font-size:15px">
+          <i data-lucide="sparkles" class="w-5 h-5"></i>
+          开始生成 3D 场景
+        </button>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
+         Page: 任务状态页 (Status)
+         ═══════════════════════════════════════════════════════ -->
+    <div id="page-status" class="page">
+      <div class="status-bar-spacer"></div>
+      <header class="flex items-center justify-center px-4 h-11 relative" style="border-bottom:1px solid var(--border)">
+        <button id="status-back" class="absolute left-4 inline-flex items-center justify-center w-8 h-8 rounded-lg" style="color:var(--foreground);background:none;border:none;cursor:pointer">
+          <i data-lucide="arrow-left" class="w-5 h-5"></i>
+        </button>
+        <span style="font-family:var(--font-sans);font-weight:600;font-size:16px;color:var(--foreground)">正在生成 3D 场景</span>
+      </header>
+      <div class="flex-1 overflow-y-auto no-scrollbar px-5 pb-6">
+        <!-- Job ID -->
+        <div class="mt-4 mb-6 text-center">
+          <p style="font:400 12px var(--font-mono);color:var(--muted-foreground);margin:0 0 4px 0">Job ID</p>
+          <p id="status-job-id" style="font:600 14px var(--font-mono);color:var(--foreground);margin:0">sharp_0000_0000</p>
+        </div>
+        <!-- 步骤追踪 -->
+        <div class="flex flex-col gap-1 mb-6">
+          <!-- Step 1: 压缩图片 -->
+          <div class="flex items-start gap-3 py-3" id="status-step-1">
+            <div class="step-icon w-8 h-8 rounded-full flex items-center justify-center shrink-0" style="background:var(--success-500)">
+              <i data-lucide="check" class="w-4 h-4" style="color:#fff"></i>
+            </div>
+            <div class="flex-1">
+              <p style="font:600 14px var(--font-sans);color:var(--foreground);margin:0 0 2px 0">压缩图片</p>
+              <p style="font:400 12px var(--font-sans);color:var(--muted-foreground);margin:0" id="status-step-1-time">已完成</p>
+            </div>
+          </div>
+          <!-- Step 2: 上传到 GitHub -->
+          <div class="flex items-start gap-3 py-3" id="status-step-2">
+            <div class="step-icon w-8 h-8 rounded-full flex items-center justify-center shrink-0" style="background:var(--success-500)">
+              <i data-lucide="check" class="w-4 h-4" style="color:#fff"></i>
+            </div>
+            <div class="flex-1">
+              <p style="font:600 14px var(--font-sans);color:var(--foreground);margin:0 0 2px 0">上传到 GitHub</p>
+              <p style="font:400 12px var(--font-sans);color:var(--muted-foreground);margin:0" id="status-step-2-time">已完成</p>
+            </div>
+          </div>
+          <!-- Step 3: Actions 运行中 -->
+          <div class="flex items-start gap-3 py-3" id="status-step-3">
+            <div class="step-icon w-8 h-8 rounded-full flex items-center justify-center shrink-0 stepper-pulse" style="background:var(--brand-500)">
+              <i data-lucide="loader" class="w-4 h-4" style="color:#fff"></i>
+            </div>
+            <div class="flex-1">
+              <p style="font:600 14px var(--font-sans);color:var(--foreground);margin:0 0 2px 0">Actions 运行中</p>
+              <p style="font:400 12px var(--font-sans);color:var(--muted-foreground);margin:0" id="status-step-3-time">已等待 00:00</p>
+            </div>
+          </div>
+          <!-- Step 4: 下载 .ply -->
+          <div class="flex items-start gap-3 py-3" id="status-step-4">
+            <div class="step-icon w-8 h-8 rounded-full flex items-center justify-center shrink-0" style="background:var(--bg-300)">
+              <i data-lucide="download" class="w-4 h-4" style="color:var(--muted-foreground)"></i>
+            </div>
+            <div class="flex-1">
+              <p style="font:600 14px var(--font-sans);color:var(--muted-foreground);margin:0 0 2px 0">下载 .ply</p>
+              <p style="font:400 12px var(--font-sans);color:var(--muted-foreground);margin:0">等待中</p>
+            </div>
+          </div>
+          <!-- Step 5: 渲染场景 -->
+          <div class="flex items-start gap-3 py-3" id="status-step-5">
+            <div class="step-icon w-8 h-8 rounded-full flex items-center justify-center shrink-0" style="background:var(--bg-300)">
+              <i data-lucide="box" class="w-4 h-4" style="color:var(--muted-foreground)"></i>
+            </div>
+            <div class="flex-1">
+              <p style="font:600 14px var(--font-sans);color:var(--muted-foreground);margin:0 0 2px 0">渲染场景</p>
+              <p style="font:400 12px var(--font-sans);color:var(--muted-foreground);margin:0">等待中</p>
+            </div>
+          </div>
+        </div>
+        <!-- 提示 -->
+        <div class="flex items-start gap-2 mb-6 p-3 rounded-xl" style="background:var(--bg-200)">
+          <i data-lucide="clock" class="w-4 h-4 mt-0.5 shrink-0" style="color:var(--muted-foreground)"></i>
+          <p style="font:400 12px/1.5 var(--font-sans);color:var(--muted-foreground)">CPU 推理较慢，通常需要 5-15 分钟。首次运行还需下载 2.44GB 模型，可能需要更长时间。</p>
+        </div>
+        <!-- 取消按钮 -->
+        <button id="status-cancel" class="btn secondary w-full flex items-center justify-center gap-2" style="min-height:44px;border-radius:16px">
+          <i data-lucide="x" class="w-4 h-4"></i>
+          取消等待
+        </button>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
+         Page: 3D 查看页 (Viewer)
+         ═══════════════════════════════════════════════════════ -->
+    <div id="page-viewer" class="page tab-page" style="background:var(--viewer-canvas-bg)">
+      <header class="flex items-center justify-between px-4 h-11 absolute top-0 left-0 right-0 z-20" style="background:rgba(0,0,0,0.3);backdrop-filter:blur(8px)">
+        <button id="viewer-back" class="inline-flex items-center justify-center w-8 h-8 rounded-lg" style="color:#fff;background:none;border:none;cursor:pointer">
+          <i data-lucide="arrow-left" class="w-5 h-5"></i>
+        </button>
+        <span id="viewer-title" style="font-family:var(--font-mono);font-weight:500;font-size:13px;color:#fff">--</span>
+        <button id="viewer-settings-btn" class="inline-flex items-center justify-center w-8 h-8 rounded-lg" style="color:#fff;background:none;border:none;cursor:pointer">
+          <i data-lucide="sliders-horizontal" class="w-5 h-5"></i>
+        </button>
+      </header>
+      <!-- Canvas 容器 -->
+      <div id="viewer-canvas-container" class="flex-1 flex items-center justify-center" style="position:relative">
+        <div id="viewer-placeholder" class="flex flex-col items-center justify-center">
+          <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center" style="background:rgba(255,255,255,0.1)">
+            <i data-lucide="box" class="w-8 h-8" style="color:rgba(255,255,255,0.4)"></i>
+          </div>
+          <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.5);margin:0 0 4px 0">查看器</p>
+          <p style="font:400 12px var(--font-sans);color:rgba(255,255,255,0.3);margin:0">从首页选择已完成的 3D 场景</p>
+        </div>
+        <canvas id="viewer-canvas" style="display:none;width:100%;height:100%"></canvas>
+        <!-- FPS 信息浮层 -->
+        <div id="viewer-info" class="absolute top-14 left-4 px-2 py-1 rounded-md" style="background:rgba(0,0,0,0.4);display:none">
+          <span id="viewer-fps" style="font:400 11px var(--font-mono);color:rgba(255,255,255,0.7)">FPS: --</span>
+        </div>
+      </div>
+      <!-- 底部悬浮按钮 -->
+      <div class="flex items-center justify-center gap-3 pb-6 pt-3 px-4" style="position:relative;z-index:10">
+        <button id="viewer-reset" class="btn secondary flex items-center gap-2" style="background:rgba(255,255,255,0.15);color:#fff;border-color:rgba(255,255,255,0.2);min-height:40px;border-radius:12px">
+          <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+          <span class="text-xs">重置视角</span>
+        </button>
+        <button id="viewer-download" class="btn secondary flex items-center gap-2" style="background:rgba(255,255,255,0.15);color:#fff;border-color:rgba(255,255,255,0.2);min-height:40px;border-radius:12px">
+          <i data-lucide="download" class="w-4 h-4"></i>
+          <span class="text-xs">下载 PLY</span>
+        </button>
+        <button id="viewer-delete" class="btn secondary flex items-center gap-2" style="background:rgba(255,255,255,0.15);color:#fff;border-color:rgba(255,255,255,0.2);min-height:40px;border-radius:12px">
+          <i data-lucide="trash-2" class="w-4 h-4"></i>
+          <span class="text-xs">删除</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
+         Page: 错误详情页 (Error)
+         ═══════════════════════════════════════════════════════ -->
+    <div id="page-error" class="page">
+      <div class="status-bar-spacer"></div>
+      <header class="flex items-center justify-center px-4 h-11 relative" style="border-bottom:1px solid var(--border)">
+        <button id="error-back" class="absolute left-4 inline-flex items-center justify-center w-8 h-8 rounded-lg" style="color:var(--foreground);background:none;border:none;cursor:pointer">
+          <i data-lucide="arrow-left" class="w-5 h-5"></i>
+        </button>
+        <span style="font-family:var(--font-sans);font-weight:600;font-size:16px;color:var(--foreground)">错误详情</span>
+      </header>
+      <div class="flex-1 overflow-y-auto no-scrollbar px-5 pb-6">
+        <div class="flex flex-col items-center pt-12 pb-8">
+          <div class="w-16 h-16 mb-4 rounded-full flex items-center justify-center" style="background:var(--error-50)">
+            <i data-lucide="alert-triangle" class="w-8 h-8" style="color:var(--error-500)"></i>
+          </div>
+          <p id="error-code" style="font:600 14px var(--font-mono);color:var(--error-600);margin:0 0 8px 0">UNKNOWN_ERROR</p>
+          <p id="error-message" style="font:600 18px var(--font-sans);color:var(--foreground);margin:0 0 4px 0;text-align:center">发生未知错误</p>
+          <p id="error-detail" style="font:400 14px var(--font-sans);color:var(--muted-foreground);margin:0;text-align:center;max-width:260px">请重试或查看下方日志信息</p>
+        </div>
+        <!-- 错误日志 -->
+        <div class="mb-6">
+          <p class="settings-section-title mb-2">错误日志</p>
+          <div class="rounded-xl p-3" style="background:var(--bg-200);border:1px solid var(--border)">
+            <pre id="error-log" style="font:400 12px/1.6 var(--font-mono);color:var(--muted-foreground);white-space:pre-wrap;word-break:break-all;margin:0">无日志信息</pre>
+          </div>
+        </div>
+        <!-- 操作按钮 -->
+        <div class="flex flex-col gap-3">
+          <button id="error-retry" class="btn primary w-full flex items-center justify-center gap-2" style="min-height:44px;border-radius:16px">
+            <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+            重试
+          </button>
+          <button id="error-go-home" class="btn secondary w-full flex items-center justify-center gap-2" style="min-height:44px;border-radius:16px">
+            <i data-lucide="home" class="w-4 h-4"></i>
+            返回首页
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
+         Overlay: 查看器设置面板 (Viewer Settings)
+         ═══════════════════════════════════════════════════════ -->
+    <div id="viewer-settings-overlay" class="fixed inset-0 z-50" style="display:none;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px)">
+      <div class="absolute bottom-0 left-0 right-0 max-w-[390px] mx-auto rounded-t-3xl p-5 pb-8" style="background:var(--popover);max-height:80vh;overflow-y:auto">
+        <div class="flex items-center justify-between mb-4">
+          <h3 style="font:600 16px var(--font-sans);color:var(--foreground);margin:0">查看器设置</h3>
+          <button id="viewer-settings-close" class="inline-flex items-center justify-center w-8 h-8 rounded-lg" style="color:var(--muted-foreground);background:none;border:none;cursor:pointer">
+            <i data-lucide="x" class="w-5 h-5"></i>
+          </button>
+        </div>
+        <!-- 背景色 -->
+        <div class="setting-row mb-4">
+          <span style="font:500 13px var(--font-sans);color:var(--foreground)">背景色</span>
+          <div class="flex gap-2">
+            <button class="w-7 h-7 rounded-full border-2 border-white" data-bg="#2b2928" style="background:#2b2928"></button>
+            <button class="w-7 h-7 rounded-full border-2 border-transparent" data-bg="#000000" style="background:#000000"></button>
+            <button class="w-7 h-7 rounded-full border-2 border-transparent" data-bg="#ffffff" style="background:#ffffff"></button>
+            <button class="w-7 h-7 rounded-full border-2 border-transparent" data-bg="#1a1a2e" style="background:#1a1a2e"></button>
+          </div>
+        </div>
+        <!-- FOV -->
+        <div class="mb-4">
+          <div class="setting-row mb-2">
+            <span style="font:500 13px var(--font-sans);color:var(--foreground)">FOV</span>
+            <span id="viewer-fov-value" style="font:600 13px var(--font-mono);color:var(--foreground)">75°</span>
+          </div>
+          <input type="range" id="viewer-fov" min="30" max="120" value="75" class="w-full" style="accent-color:var(--brand-500)">
+        </div>
+        <!-- Splat Scale -->
+        <div class="mb-4">
+          <div class="setting-row mb-2">
+            <span style="font:500 13px var(--font-sans);color:var(--foreground)">Splat 缩放</span>
+            <span id="viewer-scale-value" style="font:600 13px var(--font-mono);color:var(--foreground)">1.0</span>
+          </div>
+          <input type="range" id="viewer-scale" min="0.1" max="5" step="0.1" value="1.0" class="w-full" style="accent-color:var(--brand-500)">
+        </div>
+        <!-- Alpha 剔除 -->
+        <div class="mb-4">
+          <div class="setting-row mb-2">
+            <span style="font:500 13px var(--font-sans);color:var(--foreground)">Alpha 剔除阈值</span>
+            <span id="viewer-alpha-value" style="font:600 13px var(--font-mono);color:var(--foreground)">0</span>
+          </div>
+          <input type="range" id="viewer-alpha" min="0" max="1" step="0.01" value="0" class="w-full" style="accent-color:var(--brand-500)">
+        </div>
+        <!-- 点云模式 -->
+        <div class="setting-row mb-4">
+          <span style="font:500 13px var(--font-sans);color:var(--foreground)">点云模式</span>
+          <div id="viewer-pointcloud-toggle" class="toggle" role="switch" aria-checked="false">
+            <div class="knob"></div>
+          </div>
+        </div>
+        <!-- 最大屏幕空间 Splat 尺寸 -->
+        <div class="mb-2">
+          <div class="setting-row mb-2">
+            <span style="font:500 13px var(--font-sans);color:var(--foreground)">最大 Splat 尺寸</span>
+            <span id="viewer-maxsize-value" style="font:600 13px var(--font-mono);color:var(--foreground)">512</span>
+          </div>
+          <input type="range" id="viewer-maxsize" min="64" max="2048" step="64" value="512" class="w-full" style="accent-color:var(--brand-500)">
+        </div>
       </div>
     </div>
 
