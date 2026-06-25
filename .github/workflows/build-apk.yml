@@ -78,21 +78,12 @@ jobs:
             echo "Found APK at: $APK_PATH"
             ls -lh "$APK_PATH"
             TAG_NAME=${GITHUB_REF#refs/tags/}
-            # Try to create release, if it exists just upload the asset
+            echo "Tag: $TAG_NAME"
+            # Create release (if not exists) and upload APK
             gh release create "$TAG_NAME" "$APK_PATH" \
               --title "SharpView $TAG_NAME" \
-              --notes "## SharpView $TAG_NAME
-
-          ### 下载安装
-          1. 下载下方 APK 文件
-          2. 在手机上允许安装未知来源应用
-          3. 安装后打开 SharpView
-
-          ### 首次使用
-          1. 进入设置页配置 GitHub Token 和仓库信息
-          2. 测试连接成功后即可使用" \
-              --generate-notes 2>/dev/null || \
-            gh release upload "$TAG_NAME" "$APK_PATH" --clobber
+              --notes "SharpView $TAG_NAME - APK download" \
+              || gh release upload "$TAG_NAME" "$APK_PATH" --clobber
             echo "APK uploaded to release $TAG_NAME"
           else
             echo "ERROR: No APK found"
