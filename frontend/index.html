@@ -25,17 +25,41 @@
       flex-direction: column;
       width: 100%;
       max-width: 390px;
-      min-height: 100vh;
+      height: 100vh;
+      height: 100dvh;
       margin: 0 auto;
       background: var(--bg-100);
       position: relative;
+      overflow: hidden;
     }
-    .status-bar-spacer { height: env(safe-area-inset-top, 0px); min-height: 0px; }
-    .content-area { flex: 1; overflow-y: auto; }
-    .bottom-safe-area { height: env(safe-area-inset-bottom, 0px); background: var(--popover); }
-    .page { display: none; flex-direction: column; flex: 1; min-height: 0; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: var(--bg-100); z-index: 10; }
-    .page.active { display: flex; }
-    .page.tab-page { position: relative; z-index: 1; }
+    .status-bar-spacer { height: env(safe-area-inset-top, 0px); min-height: 0px; flex-shrink: 0; }
+    .bottom-safe-area { height: env(safe-area-inset-bottom, 0px); background: var(--popover); flex-shrink: 0; }
+
+    /* Tab pages: fill space above tab bar, internal content scrolls */
+    .page.tab-page {
+      position: relative;
+      z-index: 1;
+      flex: 1;
+      min-height: 0;
+      display: none;
+      flex-direction: column;
+      background: var(--bg-100);
+    }
+    .page.tab-page.active { display: flex; }
+
+    /* Non-tab pages: overlay entire screen (including tab bar area) */
+    .page:not(.tab-page) {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      z-index: 20;
+      display: none;
+      flex-direction: column;
+      background: var(--bg-100);
+    }
+    .page:not(.tab-page).active { display: flex; }
+
+    /* Tab bar pinned at bottom of flex container */
+    #tab-bar { flex-shrink: 0; }
   </style>
 </head>
 <body>
@@ -264,7 +288,7 @@
           </div>
           <h1 style="font-family:var(--font-display);font-weight:500;font-size:28px;color:var(--foreground);margin:0 0 6px 0">SharpView</h1>
           <div class="flex items-center gap-2 mb-3">
-            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.1.0</span>
+            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.2.0</span>
             <span class="badge muted" style="background:var(--brand-100);color:var(--brand-700);font-size:11px;min-height:22px;padding:0 8px">最新版本</span>
           </div>
           <p style="font-family:var(--font-serif);font-weight:400;font-size:14px;color:var(--secondary-foreground);font-style:italic;margin:0;text-align:center">将照片转化为 3D 高斯泼溅场景</p>
@@ -609,6 +633,7 @@
 
   </div>
 
+  <script src="scripts/github.js" defer></script>
   <script src="scripts/app.js" defer></script>
 </body>
 </html>

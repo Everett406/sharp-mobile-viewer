@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.2.0';
 
 const App = {
   currentPage: 'welcome',
@@ -183,26 +183,22 @@ const Settings = {
   },
 
   async testConnection() {
+    if (typeof GitHubAPI !== 'undefined') {
+      return GitHubAPI.testConnection(App.config);
+    }
+    // Fallback if github.js not loaded
     const c = App.config;
     if (!c || !c.githubToken || !c.repoOwner || !c.repoName) {
       return { success: false, error: 'CONFIG_INVALID', message: '请填写完整配置' };
     }
     try {
       const resp = await fetch(`https://api.github.com/repos/${c.repoOwner}/${c.repoName}`, {
-        headers: {
-          'Authorization': `token ${c.githubToken}`,
-          'Accept': 'application/vnd.github.v3+json',
-        },
+        headers: { 'Authorization': `token ${c.githubToken}`, 'Accept': 'application/vnd.github.v3+json' },
       });
-      if (resp.ok) {
-        return { success: true, message: '连接成功' };
-      } else if (resp.status === 401) {
-        return { success: false, error: 'CONFIG_INVALID', message: 'Token 无效' };
-      } else if (resp.status === 404) {
-        return { success: false, error: 'CONFIG_INVALID', message: '仓库不存在或无权限' };
-      } else {
-        return { success: false, error: 'UNKNOWN_ERROR', message: `HTTP ${resp.status}` };
-      }
+      if (resp.ok) return { success: true, message: '连接成功' };
+      if (resp.status === 401) return { success: false, error: 'CONFIG_INVALID', message: 'Token 无效' };
+      if (resp.status === 404) return { success: false, error: 'CONFIG_INVALID', message: '仓库不存在或无权限' };
+      return { success: false, error: 'UNKNOWN_ERROR', message: `HTTP ${resp.status}` };
     } catch (e) {
       return { success: false, error: 'UNKNOWN_ERROR', message: e.message };
     }
@@ -230,7 +226,7 @@ const Theme = {
 };
 
 // ═══════════════════════════════════════════════════════════
-// Image Processing (Phase 2 stubs)
+// Image Processing
 // ═══════════════════════════════════════════════════════════
 const ImageProc = {
   generateJobId() {
@@ -240,33 +236,42 @@ const ImageProc = {
     return `sharp_${ts}_${rand}`;
   },
 
-  async selectFromAlbum() {
-    // Phase 2: Use Capacitor Camera or file input
-    // For now, use a file input as fallback
+  _pickFile(capture) {
     return new Promise((resolve) => {
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'image/*';
+      if (capture) {
+        input.setAttribute('capture', 'environment');
+      }
       input.onchange = (e) => {
         const file = e.target.files[0];
-        if (file) {
-          resolve(file);
-        } else {
-          resolve(null);
-        }
+        resolve(file || null);
       };
+      // Also handle cancel
+      input.addEventListener('cancel', () => resolve(null));
       input.click();
     });
   },
 
+  async selectFromAlbum() {
+    return this._pickFile(false);
+  },
+
+  async takePhoto() {
+    return this._pickFile(true);
+  },
+
   async compress(file, maxEdge, quality) {
-    // Phase 2: Full implementation with EXIF handling
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Failed to read file'));
       reader.onload = (e) => {
         const img = new Image();
+        img.onerror = () => reject(new Error('Failed to load image'));
         img.onload = () => {
           let { width, height } = img;
+          // Scale down if larger than maxEdge
           if (width > height) {
             if (width > maxEdge) {
               height = Math.round(height * (maxEdge / width));
@@ -284,12 +289,16 @@ const ImageProc = {
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, width, height);
           const dataUrl = canvas.toDataURL('image/jpeg', quality);
+          // Convert dataURL to blob for accurate size measurement
+          const blob = dataURLtoBlob(dataUrl);
           resolve({
             dataUrl,
+            blob,
             originalSize: file.size,
-            compressedSize: Math.round(dataUrl.length * 0.75),
+            compressedSize: blob.size,
             width,
             height,
+            fileName: file.name,
           });
         };
         img.src = e.target.result;
@@ -435,8 +444,12 @@ function setupEventListeners() {
   // ── Error page ──
   document.getElementById('error-back')?.addEventListener('click', () => Router.navigate('home'));
   document.getElementById('error-retry')?.addEventListener('click', () => {
-    // Retry logic depends on where the error occurred
-    Router.navigate('home');
+    // Go back to preview if we have an image, otherwise home
+    if (App.currentImage) {
+      Router.navigate('preview');
+    } else {
+      Router.navigate('home');
+    }
   });
   document.getElementById('error-go-home')?.addEventListener('click', () => Router.navigate('home'));
 
@@ -482,31 +495,37 @@ function setupEventListeners() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Image Selection Handlers (Phase 2 stubs)
+// Image Selection Handlers
 // ═══════════════════════════════════════════════════════════
 async function handleSelectImage() {
   const file = await ImageProc.selectFromAlbum();
   if (!file) return;
-
-  const c = App.config;
-  const compressed = await ImageProc.compress(file, c.maxEdge, c.jpegQuality);
-  App.currentImage = compressed;
-
-  // Update preview page
-  document.getElementById('preview-image').src = compressed.dataUrl;
-  document.getElementById('preview-image').style.display = 'block';
-  document.getElementById('preview-placeholder').style.display = 'none';
-  document.getElementById('preview-original-size').textContent = formatBytes(compressed.originalSize);
-  document.getElementById('preview-compressed-size').textContent = formatBytes(compressed.compressedSize);
-  document.getElementById('preview-resolution').textContent = `${compressed.width} x ${compressed.height}`;
-
-  Router.navigate('preview');
+  await processAndPreview(file);
 }
 
 async function handleTakePhoto() {
-  // Phase 2: Use Capacitor Camera plugin
-  // For now, same as album selection
-  await handleSelectImage();
+  const file = await ImageProc.takePhoto();
+  if (!file) return;
+  await processAndPreview(file);
+}
+
+async function processAndPreview(file) {
+  try {
+    const c = App.config;
+    const compressed = await ImageProc.compress(file, c.maxEdge, c.jpegQuality);
+    App.currentImage = compressed;
+
+    document.getElementById('preview-image').src = compressed.dataUrl;
+    document.getElementById('preview-image').style.display = 'block';
+    document.getElementById('preview-placeholder').style.display = 'none';
+    document.getElementById('preview-original-size').textContent = formatBytes(compressed.originalSize);
+    document.getElementById('preview-compressed-size').textContent = formatBytes(compressed.compressedSize);
+    document.getElementById('preview-resolution').textContent = `${compressed.width} x ${compressed.height}`;
+
+    Router.navigate('preview');
+  } catch (e) {
+    ErrorPage.show('UNKNOWN_ERROR', `图片处理失败: ${e.message}`);
+  }
 }
 
 async function handleLoadPly() {
@@ -515,7 +534,7 @@ async function handleLoadPly() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Generation Handler (Phase 2/3 stub)
+// Generation Handler (Phase 2: Upload + Trigger + Poll)
 // ═══════════════════════════════════════════════════════════
 async function handleStartGeneration() {
   if (!App.currentImage) {
@@ -523,43 +542,206 @@ async function handleStartGeneration() {
     return;
   }
 
+  // Check configuration
+  const configured = await Settings.isConfigured();
+  if (!configured) {
+    ErrorPage.show('CONFIG_INVALID', '请先在设置页配置 GitHub 连接');
+    return;
+  }
+
   const jobId = ImageProc.generateJobId();
   App.currentJobId = jobId;
+  App.dispatchTime = new Date();
 
   // Update status page
   document.getElementById('status-job-id').textContent = jobId;
 
-  // Reset steps to initial state
+  // Reset all steps
   updateStepStatus(1, 'done', '已完成');
-  updateStepStatus(2, 'done', '已完成');
-  updateStepStatus(3, 'active', '已等待 00:00');
+  updateStepStatus(2, 'active', '上传中...');
+  updateStepStatus(3, 'pending', '等待中');
   updateStepStatus(4, 'pending', '等待中');
   updateStepStatus(5, 'pending', '等待中');
 
   Router.navigate('status');
 
-  // Phase 2: Actually upload and trigger Actions
-  // For now, just simulate waiting
-  startWaitTimer();
+  try {
+    // Step 2: Upload image to GitHub Release
+    const config = App.config;
+    const release = await GitHubAPI.ensureRelease(config);
+    const uploadFilename = `input_${jobId}.jpg`;
+    await GitHubAPI.uploadAsset(config, release.id, uploadFilename, App.currentImage.blob);
+    updateStepStatus(2, 'done', formatBytes(App.currentImage.compressedSize));
+
+    // Step 3: Trigger workflow_dispatch
+    updateStepStatus(3, 'active', '触发中...');
+    await GitHubAPI.triggerWorkflow(config, jobId);
+    updateStepStatus(3, 'active', '已等待 00:00');
+
+    // Start polling for workflow completion
+    startJobPolling();
+  } catch (e) {
+    const code = (e instanceof GitHubError) ? e.code : 'UNKNOWN_ERROR';
+    const log = e.message + '\n' + (e.stack || '');
+    ErrorPage.show(code, log);
+  }
 }
 
-function startWaitTimer() {
+function startJobPolling() {
   const startTime = Date.now();
   const maxTimeout = (App.config?.maxTimeout || 30) * 60 * 1000;
+  let runId = null;
+  let lastStatusCheck = 0;
+  let assetCheckCount = 0;
 
-  App.pollTimer = setInterval(() => {
+  App.pollTimer = setInterval(async () => {
     const elapsed = Date.now() - startTime;
     const mins = Math.floor(elapsed / 60000);
     const secs = Math.floor((elapsed % 60000) / 1000);
     const timeStr = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-    document.getElementById('status-step-3-time').textContent = `已等待 ${timeStr}`;
 
+    // Check timeout
     if (elapsed > maxTimeout) {
       clearInterval(App.pollTimer);
       App.pollTimer = null;
       ErrorPage.show('JOB_TIMEOUT', `等待超时 (${App.config.maxTimeout} 分钟)`);
+      return;
     }
-  }, 1000);
+
+    document.getElementById('status-step-3-time').textContent = `已等待 ${timeStr}`;
+
+    try {
+      const config = App.config;
+
+      // First, try to find the workflow run
+      if (!runId) {
+        const run = await GitHubAPI.findRun(config, App.dispatchTime);
+        if (run) {
+          runId = run.id;
+          console.log('Found workflow run:', runId);
+        }
+      }
+
+      // If we have a run ID, check its status
+      if (runId) {
+        const status = await GitHubAPI.getRunStatus(config, runId);
+        if (status) {
+          if (status.status === 'completed') {
+            if (status.conclusion === 'success') {
+              updateStepStatus(3, 'done', `完成 (${timeStr})`);
+              // Move to step 4: download PLY
+              clearInterval(App.pollTimer);
+              App.pollTimer = null;
+              await handleJobComplete();
+              return;
+            } else {
+              // Failure or cancelled
+              clearInterval(App.pollTimer);
+              App.pollTimer = null;
+              // Check for error asset
+              await handleJobError();
+              return;
+            }
+          }
+          // Still running, update label
+          document.getElementById('status-step-3-time').textContent = `${status.status === 'queued' ? '排队中' : '推理中'} ${timeStr}`;
+        }
+      }
+
+      // Also check for output assets every few iterations
+      // (in case the run status API is delayed)
+      assetCheckCount++;
+      if (assetCheckCount >= 5) {
+        assetCheckCount = 0;
+        const assets = await GitHubAPI.checkJobAssets(config, App.currentJobId);
+        if (assets.plyAsset) {
+          updateStepStatus(3, 'done', `完成 (${timeStr})`);
+          clearInterval(App.pollTimer);
+          App.pollTimer = null;
+          await handleJobComplete(assets.plyAsset);
+          return;
+        }
+        if (assets.errorAsset) {
+          clearInterval(App.pollTimer);
+          App.pollTimer = null;
+          await handleJobError(assets.errorAsset);
+          return;
+        }
+      }
+    } catch (e) {
+      console.error('Polling error:', e);
+      // Don't stop polling on transient errors
+    }
+  }, 3000); // Poll every 3 seconds
+}
+
+async function handleJobComplete(plyAsset) {
+  try {
+    const config = App.config;
+    updateStepStatus(4, 'active', '下载中...');
+
+    // Find the PLY asset if not provided
+    if (!plyAsset) {
+      const assets = await GitHubAPI.checkJobAssets(config, App.currentJobId);
+      plyAsset = assets.plyAsset;
+    }
+
+    if (!plyAsset) {
+      ErrorPage.show('DOWNLOAD_FAILED', '未找到 PLY 文件，推理可能尚未完成');
+      return;
+    }
+
+    // Download PLY blob
+    const plyBlob = await GitHubAPI.downloadAsset(config, plyAsset.id);
+    const plySize = plyBlob.size;
+    updateStepStatus(4, 'done', formatBytes(plySize));
+
+    // Step 5: "Render" (Phase 4 will implement actual rendering)
+    updateStepStatus(5, 'active', '准备渲染...');
+
+    // Store PLY data for viewer
+    App.currentPlyBlob = plyBlob;
+    App.currentPlySize = plySize;
+
+    // For now, show a success message
+    updateStepStatus(5, 'done', '就绪');
+    if (window.lucide) lucide.createIcons();
+
+    // Navigate to viewer after short delay
+    setTimeout(() => {
+      // Store in IndexedDB or local storage for Phase 4
+      // For now, just show a toast and go to viewer
+      showToast('3D 场景生成成功！');
+      document.getElementById('viewer-title').textContent = App.currentJobId;
+      document.getElementById('viewer-placeholder').querySelector('p').textContent = 'PLY 已下载，等待渲染器集成 (Phase 4)';
+      Router.navigate('viewer');
+    }, 500);
+
+  } catch (e) {
+    const code = (e instanceof GitHubError) ? e.code : 'DOWNLOAD_FAILED';
+    ErrorPage.show(code, e.message);
+  }
+}
+
+async function handleJobError(errorAsset) {
+  try {
+    const config = App.config;
+    let errorLog = '推理过程出错';
+
+    if (errorAsset) {
+      errorLog = await GitHubAPI.downloadErrorLog(config, errorAsset.id);
+    } else {
+      // Try to find error asset
+      const assets = await GitHubAPI.checkJobAssets(config, App.currentJobId);
+      if (assets.errorAsset) {
+        errorLog = await GitHubAPI.downloadErrorLog(config, assets.errorAsset.id);
+      }
+    }
+
+    ErrorPage.show('JOB_FAILED', errorLog);
+  } catch (e) {
+    ErrorPage.show('JOB_FAILED', '推理失败，无法获取详细日志');
+  }
 }
 
 function updateStepStatus(stepNum, status, timeText) {
@@ -594,6 +776,17 @@ function updateStepStatus(stepNum, status, timeText) {
 // ═══════════════════════════════════════════════════════════
 // Utility Functions
 // ═══════════════════════════════════════════════════════════
+function dataURLtoBlob(dataURL) {
+  const [header, base64] = dataURL.split(',');
+  const mime = header.match(/:(.*?);/)[1];
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: mime });
+}
+
 function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
