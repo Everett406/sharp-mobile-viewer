@@ -1,6 +1,7 @@
 /**
  * SharpView - GitHub API Module
- * Handles Release Asset upload/download and Actions workflow dispatch/polling.
+ * Uses Contents API for upload (base64 JSON, CapacitorHttp-compatible).
+ * Uses Release Assets API for PLY output (CI-side, no CORS issues).
  */
 
 const GitHubAPI = {
@@ -17,22 +18,21 @@ const GitHubAPI = {
 
   /**
    * Ensure the splat-jobs release exists. Create if missing.
-   * Returns { id, uploadUrl }
+   * Returns { id }
    */
   async ensureRelease(config) {
-    // Try to get existing release
     const resp = await fetch(`${this._repoUrl(config)}/releases/tags/${config.releaseTag}`, {
       headers: this._headers(config),
     });
     if (resp.ok) {
       const data = await resp.json();
-      return { id: data.id, uploadUrl: data.upload_url };
+      return { id: data.id };
     }
     if (resp.status !== 404) {
       const err = await resp.json().catch(() => ({}));
       throw new GitHubError('UPLOAD_FAILED', `获取 Release 失败: ${resp.status} ${err.message || ''}`);
     }
-    // Need to create the tag + release. First create a tag.
+    // Create tag + release
     const tagResp = await fetch(`${this._repoUrl(config)}/git/refs`, {
       method: 'POST',
       headers: { ...this._headers(config), 'Content-Type': 'application/json' },
@@ -41,12 +41,10 @@ const GitHubAPI = {
         sha: await this._getDefaultBranchSha(config),
       }),
     });
-    // If tag already exists (race condition), ignore error
     if (!tagResp.ok && tagResp.status !== 422) {
       const err = await tagResp.json().catch(() => ({}));
       throw new GitHubError('UPLOAD_FAILED', `创建 Tag 失败: ${tagResp.status} ${err.message || ''}`);
     }
-    // Create release
     const createResp = await fetch(`${this._repoUrl(config)}/releases`, {
       method: 'POST',
       headers: { ...this._headers(config), 'Content-Type': 'application/json' },
@@ -59,19 +57,18 @@ const GitHubAPI = {
       }),
     });
     if (!createResp.ok) {
-      // Maybe release was created concurrently, try fetching again
       const retryResp = await fetch(`${this._repoUrl(config)}/releases/tags/${config.releaseTag}`, {
         headers: this._headers(config),
       });
       if (retryResp.ok) {
         const data = await retryResp.json();
-        return { id: data.id, uploadUrl: data.upload_url };
+        return { id: data.id };
       }
       const err = await createResp.json().catch(() => ({}));
       throw new GitHubError('UPLOAD_FAILED', `创建 Release 失败: ${createResp.status} ${err.message || ''}`);
     }
     const data = await createResp.json();
-    return { id: data.id, uploadUrl: data.upload_url };
+    return { id: data.id };
   },
 
   async _getDefaultBranchSha(config) {
@@ -87,22 +84,23 @@ const GitHubAPI = {
   },
 
   /**
-   * Upload a binary asset to the release.
-   * Converts Blob to ArrayBuffer for CapacitorHttp compatibility.
-   * Returns the asset info.
+   * Upload image to repo using Contents API (base64 JSON body).
+   * CapacitorHttp handles JSON bodies correctly.
+   * File path: jobs/input_{jobId}.jpg
    */
-  async uploadAsset(config, releaseId, filename, blob) {
-    const url = `https://uploads.github.com/repos/${config.repoOwner}/${config.repoName}/releases/${releaseId}/assets?name=${encodeURIComponent(filename)}`;
-    // CapacitorHttp doesn't serialize Blob bodies properly — use ArrayBuffer
-    const arrayBuffer = await blob.arrayBuffer();
+  async uploadInputImage(config, jobId, blob) {
+    // Convert blob to base64
+    const base64 = await this._blobToBase64(blob);
+    const path = `jobs/input_${jobId}.jpg`;
+    const url = `${this._repoUrl(config)}/contents/${path}`;
+
     const resp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `token ${config.githubToken}`,
-        'Accept': 'application/vnd.github.v3+json',
-        'Content-Type': 'application/octet-stream',
-      },
-      body: arrayBuffer,
+      method: 'PUT',
+      headers: { ...this._headers(config), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: `upload: input_${jobId}.jpg`,
+        content: base64,
+      }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
@@ -112,14 +110,42 @@ const GitHubAPI = {
   },
 
   /**
-   * Delete an existing asset (for re-uploads with same name).
+   * Delete input file from repo after processing.
    */
-  async deleteAsset(config, releaseId, assetId) {
-    const resp = await fetch(`${this._repoUrl(config)}/releases/${releaseId}/assets/${assetId}`, {
-      method: 'DELETE',
+  async deleteInputFile(config, jobId) {
+    const path = `jobs/input_${jobId}.jpg`;
+    // First get the file SHA
+    const getResp = await fetch(`${this._repoUrl(config)}/contents/${path}`, {
       headers: this._headers(config),
     });
-    return resp.ok;
+    if (!getResp.ok) return;
+    const fileData = await getResp.json();
+    const sha = fileData.sha;
+
+    await fetch(`${this._repoUrl(config)}/contents/${path}`, {
+      method: 'DELETE',
+      headers: { ...this._headers(config), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: `cleanup: remove input_${jobId}.jpg`,
+        sha: sha,
+      }),
+    });
+  },
+
+  /**
+   * Convert Blob to base64 string (without data: prefix).
+   */
+  _blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result;
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
   },
 
   /**
@@ -135,7 +161,6 @@ const GitHubAPI = {
         inputs: { job_id: jobId },
       }),
     });
-    // 204 = success (no content)
     if (resp.status !== 204) {
       const err = await resp.json().catch(() => ({}));
       throw new GitHubError('DISPATCH_FAILED', `触发 Actions 失败: ${resp.status} ${err.message || ''}`);
@@ -143,8 +168,7 @@ const GitHubAPI = {
   },
 
   /**
-   * Find the workflow run for our job, created after the given timestamp.
-   * Returns the run object or null.
+   * Find the workflow run created after the given timestamp.
    */
   async findRun(config, since) {
     const url = `${this._repoUrl(config)}/actions/runs?per_page=10&event=workflow_dispatch`;
@@ -162,7 +186,6 @@ const GitHubAPI = {
 
   /**
    * Get the status of a workflow run.
-   * Returns { status, conclusion, htmlUrl }
    */
   async getRunStatus(config, runId) {
     const url = `${this._repoUrl(config)}/actions/runs/${runId}`;
@@ -170,15 +193,14 @@ const GitHubAPI = {
     if (!resp.ok) return null;
     const data = await resp.json();
     return {
-      status: data.status,       // 'queued' | 'in_progress' | 'completed'
-      conclusion: data.conclusion, // 'success' | 'failure' | 'cancelled' | null
+      status: data.status,
+      conclusion: data.conclusion,
       htmlUrl: data.html_url,
     };
   },
 
   /**
    * Check if the job's output files exist on the release.
-   * Returns { plyAsset, errorAsset }
    */
   async checkJobAssets(config, jobId) {
     const resp = await fetch(`${this._repoUrl(config)}/releases/tags/${config.releaseTag}`, {
@@ -194,7 +216,7 @@ const GitHubAPI = {
   },
 
   /**
-   * Download an asset's binary content.
+   * Download an asset's binary content (PLY file).
    */
   async downloadAsset(config, assetId) {
     const url = `${this._repoUrl(config)}/releases/assets/${assetId}`;
@@ -208,7 +230,7 @@ const GitHubAPI = {
   },
 
   /**
-   * Download an error log text.
+   * Download error log text.
    */
   async downloadErrorLog(config, assetId) {
     const url = `${this._repoUrl(config)}/releases/assets/${assetId}`;
@@ -230,24 +252,16 @@ const GitHubAPI = {
       const resp = await fetch(`${this._repoUrl(config)}`, {
         headers: this._headers(config),
       });
-      if (resp.ok) {
-        return { success: true, message: '连接成功' };
-      } else if (resp.status === 401) {
-        return { success: false, error: 'CONFIG_INVALID', message: 'Token 无效' };
-      } else if (resp.status === 404) {
-        return { success: false, error: 'CONFIG_INVALID', message: '仓库不存在或无权限' };
-      } else {
-        return { success: false, error: 'UNKNOWN_ERROR', message: `HTTP ${resp.status}` };
-      }
+      if (resp.ok) return { success: true, message: '连接成功' };
+      if (resp.status === 401) return { success: false, error: 'CONFIG_INVALID', message: 'Token 无效' };
+      if (resp.status === 404) return { success: false, error: 'CONFIG_INVALID', message: '仓库不存在或无权限' };
+      return { success: false, error: 'UNKNOWN_ERROR', message: `HTTP ${resp.status}` };
     } catch (e) {
       return { success: false, error: 'UNKNOWN_ERROR', message: e.message };
     }
   },
 };
 
-/**
- * Custom error class with error code.
- */
 class GitHubError {
   constructor(code, message) {
     this.code = code;

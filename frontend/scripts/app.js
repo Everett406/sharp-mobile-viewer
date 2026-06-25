@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.3.1';
 
 const App = {
   currentPage: 'welcome',
@@ -17,6 +17,7 @@ const App = {
   currentImage: null,   // { dataUrl, blob, originalSize, compressedSize, width, height, fileName }
   currentJobId: null,
   pollTimer: null,
+  displayTimer: null,
   dispatchTime: null,
   currentPlyBlob: null,
   currentPlySize: 0,
@@ -607,6 +608,7 @@ function setupEventListeners() {
   });
   document.getElementById('status-cancel')?.addEventListener('click', () => {
     if (App.pollTimer) { clearInterval(App.pollTimer); App.pollTimer = null; }
+    if (App.displayTimer) { clearInterval(App.displayTimer); App.displayTimer = null; }
     if (App.currentJobId) {
       JobManager.update(App.currentJobId, { status: 'failed', errorLog: '用户取消等待' });
     }
@@ -796,11 +798,9 @@ async function handleStartGenerationWithJobId(jobId) {
   Router.navigate('status');
 
   try {
-    // Step 2: Upload image to GitHub Release
+    // Step 2: Upload image to repo via Contents API (base64 JSON)
     const config = App.config;
-    const release = await GitHubAPI.ensureRelease(config);
-    const uploadFilename = `input_${jobId}.jpg`;
-    await GitHubAPI.uploadAsset(config, release.id, uploadFilename, App.currentImage.blob);
+    await GitHubAPI.uploadInputImage(config, jobId, App.currentImage.blob);
     updateStepStatus(2, 'done', formatBytes(App.currentImage.compressedSize));
     JobManager.update(jobId, { status: 'dispatching' });
 
@@ -821,32 +821,43 @@ async function handleStartGenerationWithJobId(jobId) {
 }
 
 function startJobPolling() {
-  // Clear any existing timer
+  // Clear any existing timers
   if (App.pollTimer) { clearInterval(App.pollTimer); App.pollTimer = null; }
+  if (App.displayTimer) { clearInterval(App.displayTimer); App.displayTimer = null; }
 
-  const startTime = Date.now();
+  // Use job's createdAt as the base time, so timer is always correct
+  const job = JobManager.get(App.currentJobId);
+  const baseTime = job ? new Date(job.createdAt).getTime() : Date.now();
   const maxTimeout = (App.config?.maxTimeout || 30) * 60 * 1000;
-  let runId = null;
+  let runId = job?.runId || null;
   let assetCheckCount = 0;
 
-  App.pollTimer = setInterval(async () => {
-    const elapsed = Date.now() - startTime;
+  // Separate 1-second timer for display updates (smooth counting)
+  App.displayTimer = setInterval(() => {
+    if (App.currentPage !== 'status') return;
+    const elapsed = Date.now() - baseTime;
     const mins = Math.floor(elapsed / 60000);
     const secs = Math.floor((elapsed % 60000) / 1000);
     const timeStr = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    const step3El = document.getElementById('status-step-3-time');
+    if (step3El && !step3El.textContent.includes('完成') && !step3El.textContent.includes('触发中')) {
+      step3El.textContent = `已等待 ${timeStr}`;
+    }
+  }, 1000);
+
+  // 5-second interval for API polling
+  App.pollTimer = setInterval(async () => {
+    const elapsed = Date.now() - baseTime;
 
     // Check timeout
     if (elapsed > maxTimeout) {
       clearInterval(App.pollTimer);
+      clearInterval(App.displayTimer);
       App.pollTimer = null;
+      App.displayTimer = null;
       JobManager.update(App.currentJobId, { status: 'timeout' });
       ErrorPage.show('JOB_TIMEOUT', `等待超时 (${App.config.maxTimeout} 分钟)`);
       return;
-    }
-
-    // Only update status page if we're on it
-    if (App.currentPage === 'status') {
-      document.getElementById('status-step-3-time').textContent = `已等待 ${timeStr}`;
     }
 
     try {
@@ -867,22 +878,29 @@ function startJobPolling() {
         const status = await GitHubAPI.getRunStatus(config, runId);
         if (status) {
           if (status.status === 'completed') {
+            clearInterval(App.pollTimer);
+            clearInterval(App.displayTimer);
+            App.pollTimer = null;
+            App.displayTimer = null;
             if (status.conclusion === 'success') {
+              const timeStr = formatElapsed(Date.now() - baseTime);
               if (App.currentPage === 'status') updateStepStatus(3, 'done', `完成 (${timeStr})`);
-              clearInterval(App.pollTimer);
-              App.pollTimer = null;
               await handleJobComplete();
               return;
             } else {
-              clearInterval(App.pollTimer);
-              App.pollTimer = null;
               await handleJobError();
               return;
             }
           }
-          // Still running
+          // Still running — update label via display timer
           if (App.currentPage === 'status') {
-            document.getElementById('status-step-3-time').textContent = `${status.status === 'queued' ? '排队中' : '推理中'} ${timeStr}`;
+            const step3El = document.getElementById('status-step-3-time');
+            if (step3El && !step3El.textContent.includes('完成')) {
+              const label = status.status === 'queued' ? '排队中' : '推理中';
+              // Let the 1-second timer handle the time part
+              // Just set a flag so the display timer knows the status
+              step3El.dataset.statusLabel = label;
+            }
           }
         }
       }
@@ -893,15 +911,20 @@ function startJobPolling() {
         assetCheckCount = 0;
         const assets = await GitHubAPI.checkJobAssets(config, App.currentJobId);
         if (assets.plyAsset) {
-          if (App.currentPage === 'status') updateStepStatus(3, 'done', `完成 (${timeStr})`);
           clearInterval(App.pollTimer);
+          clearInterval(App.displayTimer);
           App.pollTimer = null;
+          App.displayTimer = null;
+          const timeStr = formatElapsed(Date.now() - baseTime);
+          if (App.currentPage === 'status') updateStepStatus(3, 'done', `完成 (${timeStr})`);
           await handleJobComplete(assets.plyAsset);
           return;
         }
         if (assets.errorAsset) {
           clearInterval(App.pollTimer);
+          clearInterval(App.displayTimer);
           App.pollTimer = null;
+          App.displayTimer = null;
           await handleJobError(assets.errorAsset);
           return;
         }
@@ -1032,6 +1055,12 @@ function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function formatElapsed(ms) {
+  const mins = Math.floor(ms / 60000);
+  const secs = Math.floor((ms % 60000) / 1000);
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
 function showToast(message) {
