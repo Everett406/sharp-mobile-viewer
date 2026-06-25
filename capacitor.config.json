@@ -18,6 +18,9 @@
         "READ_MEDIA_IMAGES",
         "WRITE_EXTERNAL_STORAGE"
       ]
+    },
+    "CapacitorHttp": {
+      "enabled": true
     }
   }
 }

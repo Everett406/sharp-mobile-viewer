@@ -98,7 +98,6 @@ const GitHubAPI = {
         'Authorization': `token ${config.githubToken}`,
         'Accept': 'application/vnd.github.v3+json',
         'Content-Type': 'application/octet-stream',
-        'Content-Length': blob.size,
       },
       body: blob,
     });
