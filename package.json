@@ -25,12 +25,9 @@
     "@capacitor/core": "^6.1.2",
     "@capacitor/filesystem": "^6.0.1",
     "@capacitor/preferences": "^6.0.2",
-    "@capacitor/camera": "^6.0.2",
-    "@sparkjsdev/spark": "^0.2.1",
-    "three": "^0.165.0"
+    "@capacitor/camera": "^6.0.2"
   },
   "devDependencies": {
-    "@capacitor/cli": "^6.1.2",
-    "http-server": "^14.1.1"
+    "@capacitor/cli": "^6.1.2"
   }
 }
