@@ -230,6 +230,53 @@ const GitHubAPI = {
   },
 
   /**
+   * Download an asset with progress callback.
+   * Uses XHR for progress events (CapacitorHttp patches fetch but not XHR).
+   * Falls back to fetch if XHR fails.
+   */
+  downloadAssetWithProgress(config, assetId, onProgress) {
+    return new Promise(async (resolve, reject) => {
+      const url = `${this._repoUrl(config)}/releases/assets/${assetId}`;
+
+      // Try XHR first for progress support
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', url, true);
+        xhr.responseType = 'blob';
+        xhr.setRequestHeader('Authorization', `token ${config.githubToken}`);
+        xhr.setRequestHeader('Accept', 'application/octet-stream');
+
+        xhr.onprogress = (e) => {
+          if (e.lengthComputable && onProgress) {
+            onProgress(e.loaded);
+          }
+        };
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            if (onProgress) onProgress(xhr.response.size);
+            resolve(xhr.response);
+          } else {
+            reject(new GitHubError('DOWNLOAD_FAILED', `下载失败: ${xhr.status}`));
+          }
+        };
+
+        xhr.onerror = () => {
+          // XHR failed (possibly CORS), fall back to fetch
+          console.log('XHR download failed, falling back to fetch');
+          this.downloadAsset(config, assetId).then(resolve).catch(reject);
+        };
+
+        xhr.send();
+      } catch (e) {
+        // XHR not available, fall back to fetch
+        console.log('XHR not available, using fetch');
+        this.downloadAsset(config, assetId).then(resolve).catch(reject);
+      }
+    });
+  },
+
+  /**
    * Download error log text.
    */
   async downloadErrorLog(config, assetId) {

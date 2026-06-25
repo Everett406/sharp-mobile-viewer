@@ -30,25 +30,41 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Cache SHARP model weights
+      - name: Cache SHARP environment (model + venv)
         uses: actions/cache@v4
+        id: sharp-cache
         with:
-          path: ~/.cache/torch/hub/checkpoints
-          key: sharp-model-v1
+          path: |
+            /tmp/sharp-venv
+            /tmp/ml-sharp
+            ~/.cache/torch/hub/checkpoints
+          key: sharp-env-v2
           restore-keys: |
-            sharp-model-
+            sharp-env-
 
-      - name: Clone and install SHARP
+      - name: Create venv and install SHARP (if not cached)
+        if: steps.sharp-cache.outputs.cache-hit != 'true'
         run: |
+          python -m venv /tmp/sharp-venv
+          source /tmp/sharp-venv/bin/activate
           git clone https://github.com/apple/ml-sharp.git /tmp/ml-sharp
           cd /tmp/ml-sharp
           pip install -r requirements.txt
+
+      - name: Verify SHARP installation (if cached)
+        if: steps.sharp-cache.outputs.cache-hit == 'true'
+        run: |
+          source /tmp/sharp-venv/bin/activate
+          which sharp && echo "SHARP CLI found" || echo "SHARP CLI not found, will reinstall"
+          if ! which sharp; then
+            cd /tmp/ml-sharp
+            pip install -r requirements.txt
+          fi
 
       - name: Verify input image (with retry)
         run: |
           INPUT_FILE="jobs/input_${{ inputs.job_id }}.jpg"
           
-          # Retry loop: the Contents API commit may not have propagated yet
           for i in 1 2 3 4 5 6; do
             if [ -f "$INPUT_FILE" ]; then
               FILE_SIZE=$(stat -c%s "$INPUT_FILE" 2>/dev/null || echo 0)
@@ -68,7 +84,6 @@ jobs:
           
           if [ ! -f "$INPUT_FILE" ]; then
             echo "ERROR: Input file not found after retries: $INPUT_FILE"
-            echo "Listing jobs/ directory:"
             ls -la jobs/ 2>/dev/null || echo "jobs/ directory does not exist"
             echo "Error: Input image not found in repo after 6 retries" > ${{ inputs.job_id }}.error.txt
             exit 1
@@ -87,6 +102,7 @@ jobs:
         id: inference
         continue-on-error: true
         run: |
+          source /tmp/sharp-venv/bin/activate
           cd /tmp/ml-sharp
           sharp predict \
             -i ${{ github.workspace }}/jobs \
