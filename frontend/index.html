@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#c96442">
+  <title>SharpView</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="styles/theme.css">
+  <link rel="stylesheet" href="styles/components.css">
+  <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js" defer></script>
+  <style>
+    * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font-sans);
+      background: var(--bg-100);
+      color: var(--foreground);
+      -webkit-font-smoothing: antialiased;
+      overscroll-behavior: none;
+    }
+    #app {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      max-width: 390px;
+      min-height: 100vh;
+      margin: 0 auto;
+      background: var(--bg-100);
+      position: relative;
+    }
+    .status-bar-spacer { height: env(safe-area-inset-top, 0px); }
+    .content-area { flex: 1; overflow-y: auto; }
+    .bottom-safe-area { height: env(safe-area-inset-bottom, 0px); background: var(--popover); }
+  </style>
+</head>
+<body>
+  <div id="app">
+
+    <!-- ═══════════════════════════════════════════════════════
+         Page: 欢迎引导页 (Welcome)
+         ═══════════════════════════════════════════════════════ -->
+    <div id="page-welcome" class="page">
+      <div class="status-bar-spacer"></div>
+      <header class="flex items-center px-5 py-3">
+        <h1 class="text-[20px] font-medium" style="font-family:var(--font-display);color:var(--foreground)">SharpView</h1>
+      </header>
+      <div class="flex-1 flex flex-col items-center justify-center px-6 pb-6">
+        <div class="welcome-illustration mb-6">
+          <div class="relative w-[100px] h-[100px] rounded-[22px] border-[3px] flex items-center justify-center" style="border-color:var(--brand-500);background:var(--brand-50)">
+            <div class="w-[48px] h-[48px] rounded-full border-[3px] flex items-center justify-center" style="border-color:var(--brand-400);background:var(--brand-100)">
+              <div class="w-[20px] h-[20px] rounded-full" style="background:var(--brand-300)"></div>
+            </div>
+          </div>
+        </div>
+        <h2 class="text-[24px] font-medium text-center mb-3" style="font-family:var(--font-display);color:var(--foreground)">开始你的 3D 之旅</h2>
+        <p class="text-[14px] text-center leading-relaxed mb-8 max-w-[280px]" style="font-family:var(--font-serif);color:var(--muted-foreground);line-height:1.6">拍照或选择图片，SharpView 将通过 Apple SHARP 模型为你生成逼真的 3D 高斯泼溅场景</p>
+        <div class="w-full max-w-[300px] flex flex-col gap-3 mb-8">
+          <button id="welcome-go-settings" class="btn primary w-full" style="height:48px;font-size:15px">配置 GitHub 连接</button>
+          <button id="welcome-go-home" class="btn secondary w-full" style="height:48px;font-size:15px">进入首页</button>
+        </div>
+        <div class="w-full max-w-[300px] flex gap-2">
+          <div class="flex-1 rounded-xl text-center py-3 px-2" style="background:var(--card)">
+            <div class="flex justify-center mb-1.5"><i data-lucide="camera" class="w-6 h-6" style="color:var(--primary)"></i></div>
+            <span class="text-[11px] font-medium" style="color:var(--foreground)">拍照</span>
+          </div>
+          <div class="flex-1 rounded-xl text-center py-3 px-2" style="background:var(--card)">
+            <div class="flex justify-center mb-1.5"><i data-lucide="box" class="w-6 h-6" style="color:var(--primary)"></i></div>
+            <span class="text-[11px] font-medium" style="color:var(--foreground)">3D 生成</span>
+          </div>
+          <div class="flex-1 rounded-xl text-center py-3 px-2" style="background:var(--card)">
+            <div class="flex justify-center mb-1.5"><i data-lucide="eye" class="w-6 h-6" style="color:var(--primary)"></i></div>
+            <span class="text-[11px] font-medium" style="color:var(--foreground)">查看场景</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
+         Page: 首页 (Home)
+         ═══════════════════════════════════════════════════════ -->
+    <div id="page-home" class="page">
+      <div class="status-bar-spacer"></div>
+      <header class="flex items-center justify-between px-5 py-3">
+        <h1 class="text-xl font-semibold tracking-tight" style="font-family:var(--font-display);color:var(--foreground)">SharpView</h1>
+        <button id="home-go-settings" class="inline-flex items-center justify-center w-9 h-9 rounded-lg" style="color:var(--muted-foreground);background:none;border:none;cursor:pointer">
+          <i data-lucide="settings" class="w-5 h-5"></i>
+        </button>
+      </header>
+      <div class="flex-1 overflow-y-auto no-scrollbar px-5 pb-24">
+        <section class="flex flex-col gap-3 mt-2">
+          <button id="home-select-image" class="btn primary flex items-center justify-center gap-2 w-full" style="height:56px;border-radius:16px;font-size:15px">
+            <i data-lucide="image" class="w-5 h-5"></i>
+            <span>从相册选择图片</span>
+          </button>
+          <div class="flex gap-3">
+            <button id="home-take-photo" class="btn secondary flex items-center justify-center gap-2 flex-1" style="height:44px;font-size:14px">
+              <i data-lucide="camera" class="w-4 h-4"></i>
+              <span>拍照</span>
+            </button>
+            <button id="home-load-ply" class="btn secondary flex items-center justify-center gap-2 flex-1" style="height:44px;font-size:14px">
+              <i data-lucide="file" class="w-4 h-4"></i>
+              <span>加载本地 .ply</span>
+            </button>
+          </div>
+        </section>
+        <div class="mt-6 mb-3">
+          <p class="text-xs font-semibold tracking-widest uppercase" style="font-family:var(--font-serif);color:var(--muted-foreground);letter-spacing:.12em">最近生成</p>
+        </div>
+        <div id="home-history-list" class="flex flex-col gap-3">
+          <p class="text-sm text-center py-8" style="color:var(--muted-foreground)">暂无生成记录</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
+         Page: 设置 (Settings)
+         ═══════════════════════════════════════════════════════ -->
+    <div id="page-settings" class="page">
+      <div class="status-bar-spacer"></div>
+      <header class="flex items-center justify-between px-5 py-3">
+        <button id="settings-back" class="inline-flex items-center justify-center w-9 h-9 rounded-lg" style="color:var(--foreground);background:none;border:none;cursor:pointer">
+          <i data-lucide="arrow-left" class="w-5 h-5"></i>
+        </button>
+        <h1 class="text-base font-semibold" style="font-family:var(--font-sans);color:var(--foreground)">设置</h1>
+        <button id="settings-go-about" class="inline-flex items-center justify-center w-9 h-9 rounded-lg" style="color:var(--muted-foreground);background:none;border:none;cursor:pointer">
+          <i data-lucide="info" class="w-5 h-5"></i>
+        </button>
+      </header>
+      <div class="flex-1 overflow-y-auto no-scrollbar px-5 pb-4" style="padding-bottom:100px">
+        <!-- GitHub 配置 -->
+        <div class="mb-5">
+          <p class="settings-section-title mb-2">GitHub 配置</p>
+          <div class="settings-card">
+            <div>
+              <label class="block mb-1.5 setting-label">GitHub Token</label>
+              <input type="password" id="settings-token" class="field" placeholder="输入 GitHub Token">
+            </div>
+            <div>
+              <label class="block mb-1.5 setting-label">仓库 Owner</label>
+              <input type="text" id="settings-owner" class="field" placeholder="GitHub 用户名">
+            </div>
+            <div>
+              <label class="block mb-1.5 setting-label">仓库名</label>
+              <input type="text" id="settings-repo" class="field" placeholder="仓库名称">
+            </div>
+            <div>
+              <label class="block mb-1.5 setting-label">仓库类型</label>
+              <div class="segmented" id="settings-repo-type">
+                <div class="segment-indicator"></div>
+                <button class="segment active" data-value="public">公开</button>
+                <button class="segment" data-value="private">私有</button>
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-3 mt-3">
+            <button id="settings-test-connection" class="btn secondary flex items-center gap-2">
+              <i data-lucide="plug" class="w-4 h-4"></i>
+              测试连接
+            </button>
+            <div id="connection-status" class="flex items-center gap-1.5" style="display:none">
+              <i data-lucide="check-circle-2" class="w-4 h-4" style="color:var(--success-500)"></i>
+              <span style="font:500 13px/1.2 var(--font-sans);color:var(--success-500)">已连接</span>
+            </div>
+          </div>
+        </div>
+        <!-- 图片处理 -->
+        <div class="mb-5">
+          <p class="settings-section-title mb-2">图片处理</p>
+          <div class="settings-card">
+            <div>
+              <label class="block mb-1.5 setting-label">最长边</label>
+              <div class="flex items-center" style="height:40px;border:1px solid var(--border-300);border-radius:16px;background:var(--bg-100);box-shadow:var(--shadow-sm);overflow:hidden">
+                <input type="number" id="settings-max-edge" value="1536" class="flex-1 min-w-0" style="height:100%;padding:0 12px;border:none;background:transparent;color:var(--text-800);font:400 14px/1.4 var(--font-sans);outline:none">
+                <span class="flex items-center pr-3" style="font:500 13px/1 var(--font-sans);color:var(--text-400)">px</span>
+              </div>
+            </div>
+            <div>
+              <label class="block mb-1.5 setting-label">JPEG 质量</label>
+              <div class="flex items-center gap-3" style="height:40px">
+                <div class="flex-1 relative h-2" style="border-radius:var(--radius-full);background:var(--bg-300)">
+                  <div id="quality-fill" class="absolute left-0 top-0 h-full" style="width:90%;border-radius:var(--radius-full);background:var(--brand-500)"></div>
+                </div>
+                <span id="quality-value" class="shrink-0" style="font:600 13px/1 var(--font-sans);color:var(--text-800);min-width:32px;text-align:right">0.9</span>
+              </div>
+            </div>
+            <div>
+              <label class="block mb-1.5 setting-label">默认图片来源</label>
+              <div class="segmented" id="settings-image-source">
+                <div class="segment-indicator"></div>
+                <button class="segment active" data-value="album">相册</button>
+                <button class="segment" data-value="camera">相机</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- 云端管理 -->
+        <div class="mb-5">
+          <p class="settings-section-title mb-2">云端管理</p>
+          <div class="settings-card">
+            <div>
+              <label class="block mb-1.5 setting-label">Release Tag</label>
+              <input type="text" id="settings-release-tag" value="splat-jobs" class="field">
+            </div>
+            <div>
+              <label class="block mb-1.5 setting-label">云端保留天数</label>
+              <input type="number" id="settings-retention" value="3" class="field">
+            </div>
+            <div>
+              <label class="block mb-1.5 setting-label">最大等待时间</label>
+              <div class="flex items-center" style="height:40px;border:1px solid var(--border-300);border-radius:16px;background:var(--bg-100);box-shadow:var(--shadow-sm);overflow:hidden">
+                <input type="number" id="settings-timeout" value="30" class="flex-1 min-w-0" style="height:100%;padding:0 12px;border:none;background:transparent;color:var(--text-800);font:400 14px/1.4 var(--font-sans);outline:none">
+                <span class="flex items-center pr-3" style="font:500 13px/1 var(--font-sans);color:var(--text-400)">分钟</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- 外观 -->
+        <div class="mb-5">
+          <p class="settings-section-title mb-2">外观</p>
+          <div class="settings-card" style="flex-direction:row;align-items:center;justify-content:space-between">
+            <span style="font:600 13px/1.2 var(--font-sans);color:var(--text-800)">深色模式</span>
+            <div class="flex items-center gap-2">
+              <span id="dark-mode-label" style="font:400 13px/1.2 var(--font-sans);color:var(--text-500)">跟随系统</span>
+              <div id="dark-mode-toggle" class="toggle" role="switch" aria-checked="false">
+                <div class="knob"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- 保存按钮 -->
+        <button id="settings-save" class="btn primary w-full flex items-center justify-center gap-2" style="min-height:44px;border-radius:16px">
+          <i data-lucide="check" class="w-4 h-4"></i>
+          保存配置
+        </button>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
+         Page: 关于 (About)
+         ═══════════════════════════════════════════════════════ -->
+    <div id="page-about" class="page">
+      <div class="status-bar-spacer"></div>
+      <header class="flex items-center justify-center px-4 h-11 relative" style="border-bottom:1px solid var(--border)">
+        <button id="about-back" class="absolute left-4 inline-flex items-center justify-center w-8 h-8 rounded-lg" style="color:var(--foreground);background:none;border:none;cursor:pointer">
+          <i data-lucide="arrow-left" class="w-5 h-5"></i>
+        </button>
+        <span style="font-family:var(--font-sans);font-weight:600;font-size:16px;color:var(--foreground)">关于</span>
+      </header>
+      <div class="flex-1 overflow-y-auto no-scrollbar">
+        <section class="flex flex-col items-center pt-10 pb-6 px-6">
+          <div class="flex items-center justify-center w-12 h-12 mb-4" style="background:var(--brand-500);border-radius:var(--radius-md)">
+            <span style="font-family:var(--font-display);font-weight:500;font-size:26px;color:var(--primary-foreground);line-height:1">S</span>
+          </div>
+          <h1 style="font-family:var(--font-display);font-weight:500;font-size:28px;color:var(--foreground);margin:0 0 6px 0">SharpView</h1>
+          <div class="flex items-center gap-2 mb-3">
+            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.1.0</span>
+            <span class="badge muted" style="background:var(--brand-100);color:var(--brand-700);font-size:11px;min-height:22px;padding:0 8px">最新版本</span>
+          </div>
+          <p style="font-family:var(--font-serif);font-weight:400;font-size:14px;color:var(--secondary-foreground);font-style:italic;margin:0;text-align:center">将照片转化为 3D 高斯泼溅场景</p>
+        </section>
+        <div class="mx-6" style="border-top:1px solid var(--border)"></div>
+        <div class="px-4 pt-6 pb-4 flex flex-col gap-4">
+          <section class="card">
+            <h2 style="font-family:var(--font-sans);font-weight:600;font-size:15px;color:var(--foreground);margin:0 0 12px 0">项目信息</h2>
+            <div class="setting-row py-3" style="border-bottom:1px solid var(--border)">
+              <span style="font:500 12px var(--font-sans);color:var(--muted-foreground)">开发者</span>
+              <span style="font:500 13px var(--font-sans);color:var(--foreground)">SharpView Team</span>
+            </div>
+            <div class="setting-row py-3" style="border-bottom:1px solid var(--border)">
+              <span style="font:500 12px var(--font-sans);color:var(--muted-foreground)">技术模型</span>
+              <span style="font:500 13px var(--font-sans);color:var(--foreground)">Apple SHARP</span>
+            </div>
+            <div class="setting-row py-3" style="border-bottom:1px solid var(--border)">
+              <span style="font:500 12px var(--font-sans);color:var(--muted-foreground)">推理平台</span>
+              <span style="font:500 13px var(--font-sans);color:var(--foreground)">GitHub Actions</span>
+            </div>
+            <div class="setting-row py-3">
+              <span style="font:500 12px var(--font-sans);color:var(--muted-foreground)">开源许可</span>
+              <span style="font:500 13px var(--font-sans);color:var(--foreground)">MIT License</span>
+            </div>
+          </section>
+          <section class="card">
+            <h2 style="font-family:var(--font-sans);font-weight:600;font-size:15px;color:var(--foreground);margin:0 0 12px 0">技术说明</h2>
+            <p style="font-family:var(--font-serif);font-weight:400;font-size:14px;color:var(--secondary-foreground);line-height:1.7;margin:0 0 14px 0">SharpView 利用 Apple 的 SHARP 模型，通过 GitHub Actions 云端推理，将单张照片重建为 3D 高斯泼溅场景。推理结果以 .ply 格式存储，支持本地实时渲染查看。</p>
+            <div class="flex flex-wrap gap-1.5">
+              <span class="badge muted" style="font-size:11px;min-height:26px">模型大小: 2.44 GB</span>
+              <span class="badge muted" style="font-size:11px;min-height:26px">推理时间: 5-15 分钟</span>
+              <span class="badge muted" style="font-size:11px;min-height:26px">输出格式: .ply</span>
+            </div>
+          </section>
+        </div>
+        <footer class="flex flex-col items-center pt-4 pb-10 px-6">
+          <p style="font:400 11px var(--font-sans);color:var(--muted-foreground);margin:0 0 4px 0">&copy; 2025 SharpView Team</p>
+        </footer>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
+         Bottom Tab Bar (Unified: 3 tabs)
+         ═══════════════════════════════════════════════════════ -->
+    <nav id="tab-bar" class="tab-bar" style="display:none">
+      <button class="tab-item active" data-page="home">
+        <i data-lucide="house" class="tab-icon"></i>
+        <span class="tab-label">首页</span>
+      </button>
+      <button class="tab-item" data-page="viewer">
+        <i data-lucide="eye" class="tab-icon"></i>
+        <span class="tab-label">查看器</span>
+      </button>
+      <button class="tab-item" data-page="settings">
+        <i data-lucide="settings" class="tab-icon"></i>
+        <span class="tab-label">设置</span>
+      </button>
+    </nav>
+    <div class="bottom-safe-area"></div>
+
+  </div>
+
+  <script src="scripts/app.js" defer></script>
+</body>
+</html>

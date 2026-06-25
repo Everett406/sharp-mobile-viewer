@@ -1,0 +1,241 @@
+/* ============================================================
+   SharpView Design System — Component Styles
+   Extracted from prototype design files.
+   ============================================================ */
+
+/* ── Badge ─────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 calc(var(--spacing) * 3.5);
+  border-radius: var(--radius);
+  font: 600 12px/1 var(--font-sans);
+  letter-spacing: .01em;
+  white-space: nowrap;
+  transition: transform .16s ease, box-shadow .16s ease, background-color .16s ease, color .16s ease, border-color .16s ease;
+}
+.badge:hover { transform: translateY(-1px); }
+.badge.filled { background: var(--primary); color: var(--primary-foreground); border: 1px solid transparent; box-shadow: var(--shadow-xs); }
+.badge.filled:hover { box-shadow: var(--shadow-sm); }
+.badge.muted { background: var(--muted); color: var(--foreground); border: 1px solid transparent; }
+.badge.outline { background: var(--popover); color: var(--foreground); border: 1px solid var(--border); }
+
+/* ── Status Badge ──────────────────────────────────────────── */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-full);
+  font: 600 11px/1 var(--font-sans);
+  letter-spacing: .01em;
+  white-space: nowrap;
+}
+.badge-success { background: var(--success-500); color: var(--primary-foreground); }
+.badge-running { background: var(--brand-500); color: var(--primary-foreground); animation: pulse-badge 2s ease-in-out infinite; }
+.badge-error { background: var(--error-500); color: var(--primary-foreground); }
+
+@keyframes pulse-badge {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.06); opacity: 0.85; }
+}
+
+/* ── Button ────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  background: transparent;
+  color: var(--foreground);
+  font: 600 14px/1.1 var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .16s ease, color .16s ease, border-color .16s ease, box-shadow .16s ease;
+}
+.btn:hover, .btn:focus-visible { box-shadow: var(--shadow-md); }
+.btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.btn:disabled { cursor: not-allowed; box-shadow: none; }
+.btn.primary { background: var(--primary); color: var(--primary-foreground); }
+.btn.primary:disabled { background: var(--secondary); color: var(--muted-foreground); border-color: var(--border); }
+.btn.secondary { background: var(--secondary); color: var(--foreground); border-color: var(--border); }
+.btn.secondary:disabled { background: var(--background); color: var(--muted-foreground); border-color: var(--border); }
+.btn.ghost { background: transparent; color: var(--foreground); box-shadow: none; }
+.btn.ghost:hover, .btn.ghost:focus-visible { background: var(--muted); }
+.btn.ghost:disabled { background: transparent; color: var(--muted-foreground); border-color: transparent; }
+
+/* ── Card ──────────────────────────────────────────────────── */
+.card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--popover);
+  box-shadow: var(--shadow-sm);
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.card:hover { transform: translateY(-1px); box-shadow: var(--shadow-lg); }
+.card .eyebrow { margin: 0 0 10px; font: 600 10px/1.2 var(--font-serif); letter-spacing: .12em; text-transform: uppercase; color: var(--muted-foreground); }
+.card .title { margin: 0 0 10px; font: 600 21px/1.18 var(--font-sans); color: var(--foreground); }
+.card .body { margin: 0; flex: 1; font-size: 14px; line-height: 1.6; color: var(--secondary-foreground); }
+
+/* ── Input ─────────────────────────────────────────────────── */
+.field {
+  width: 100%;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border-300);
+  border-radius: 16px;
+  background: var(--bg-100);
+  color: var(--text-800);
+  font: 400 14px/1.4 var(--font-sans);
+  box-shadow: var(--shadow-sm);
+  outline: none;
+  transition: border-color .16s ease;
+}
+.field:focus { border-color: var(--ring); }
+.field:disabled { background: var(--card); color: var(--muted-foreground); box-shadow: none; }
+
+/* ── Segmented Control ─────────────────────────────────────── */
+.segmented {
+  position: relative;
+  display: flex;
+  padding: 2px;
+  border-radius: var(--radius-full);
+  background: var(--bg-300);
+}
+.segmented .segment {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  padding: 8px 0;
+  text-align: center;
+  font: 600 13px/1.1 var(--font-sans);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color .2s ease;
+}
+.segmented .segment.active { color: var(--primary-foreground); }
+.segmented .segment:not(.active) { color: var(--text-500); }
+.segmented .segment-indicator {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  height: calc(100% - 4px);
+  border-radius: var(--radius-full);
+  background: var(--brand-500);
+  box-shadow: var(--shadow-sm);
+  transition: transform .2s ease;
+}
+
+/* ── Toggle Switch ─────────────────────────────────────────── */
+.toggle {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background: var(--bg-300);
+  cursor: pointer;
+  transition: background-color .2s ease;
+}
+.toggle.on { background: var(--brand-500); }
+.toggle .knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--popover-foreground);
+  box-shadow: var(--shadow-sm);
+  transition: left .2s ease;
+}
+.toggle.on .knob { left: calc(100% - 22px); }
+
+/* ── Bottom Tab Bar ────────────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  height: 56px;
+  border-top: 1px solid var(--border);
+  background: var(--popover);
+}
+.tab-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  flex: 1;
+  height: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.tab-item .tab-icon { width: 20px; height: 20px; }
+.tab-item .tab-label { font: 600 10px/1 var(--font-sans); }
+.tab-item.active { color: var(--primary); }
+.tab-item:not(.active) { color: var(--muted-foreground); }
+
+/* ── Settings Card ─────────────────────────────────────────── */
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-300);
+  border-radius: var(--radius);
+  background: var(--bg-50);
+  box-shadow: var(--shadow-sm);
+}
+.settings-section-title {
+  margin: 0 0 8px;
+  font: 500 11px/1.2 var(--font-serif);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-500);
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.setting-label {
+  font: 600 13px/1.2 var(--font-sans);
+  color: var(--text-500);
+  flex-shrink: 0;
+}
+
+/* ── No Scrollbar ──────────────────────────────────────────── */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ── Page Container ────────────────────────────────────────── */
+.page {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.page.active { display: flex; }
+
+/* ── Stepper ───────────────────────────────────────────────── */
+@keyframes stepper-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+.stepper-pulse { animation: stepper-pulse 2s ease infinite; }

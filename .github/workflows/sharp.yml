@@ -1,0 +1,90 @@
+name: SHARP Inference
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Job ID (format: sharp_timestamp_random4)'
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: splat-jobs
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  inference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache SHARP model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/torch/hub/checkpoints
+          key: sharp-model-${{ runner.os }}
+          restore-keys: |
+            sharp-model-
+
+      - name: Install SHARP
+        run: |
+          git clone https://github.com/apple/ml-sharp.git /tmp/ml-sharp
+          cd /tmp/ml-sharp
+          pip install -e .
+
+      - name: Create job workspace
+        run: |
+          mkdir -p jobs/${{ inputs.job_id }}/input
+          mkdir -p jobs/${{ inputs.job_id }}/output
+
+      - name: Download input image from Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download ${{ env.RELEASE_TAG }} \
+            --pattern "input_${{ inputs.job_id }}.jpg" \
+            --dir jobs/${{ inputs.job_id }}/input/ \
+            --clobber
+
+      - name: Run SHARP inference
+        id: inference
+        continue-on-error: true
+        run: |
+          cd /tmp/ml-sharp
+          sharp predict \
+            -i ${{ github.workspace }}/jobs/${{ inputs.job_id }}/input \
+            -o ${{ github.workspace }}/jobs/${{ inputs.job_id }}/output
+
+      - name: Upload PLY to Release (on success)
+        if: steps.inference.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PLY_FILE=$(find jobs/${{ inputs.job_id }}/output -name "*.ply" | head -1)
+          if [ -n "$PLY_FILE" ]; then
+            cp "$PLY_FILE" ${{ inputs.job_id }}.ply
+            gh release upload ${{ env.RELEASE_TAG }} ${{ inputs.job_id }}.ply --clobber
+          else
+            echo "ERROR: No .ply file found in output" > ${{ inputs.job_id }}.error.txt
+            gh release upload ${{ env.RELEASE_TAG }} ${{ inputs.job_id }}.error.txt --clobber
+          fi
+
+      - name: Upload error info to Release (on failure)
+        if: steps.inference.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Error: SHARP inference failed" > ${{ inputs.job_id }}.error.txt
+          echo "Step: run_sharp_reconstruction" >> ${{ inputs.job_id }}.error.txt
+          echo "Workflow: sharp.yml" >> ${{ inputs.job_id }}.error.txt
+          echo "Run ID: ${{ github.run_id }}" >> ${{ inputs.job_id }}.error.txt
+          echo "Repository: ${{ github.repository }}" >> ${{ inputs.job_id }}.error.txt
+          gh release upload ${{ env.RELEASE_TAG }} ${{ inputs.job_id }}.error.txt --clobber

@@ -1,0 +1,58 @@
+name: Cleanup Old Assets
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: '保留天数（删除超过此天数的 asset）'
+        required: false
+        default: '3'
+        type: string
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Clean up old Release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: splat-jobs
+          RETENTION_DAYS: ${{ github.event.inputs.retention_days || '3' }}
+        run: |
+          echo "Cleaning up assets older than $RETENTION_DAYS days from release $RELEASE_TAG"
+
+          # Get current timestamp
+          CUTOFF_DATE=$(date -d "$RETENTION_DAYS days ago" -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "Cutoff date: $CUTOFF_DATE"
+
+          # List all assets in the release
+          ASSETS=$(gh release view "$RELEASE_TAG" --json assets -q '.assets[] | "\(.name) \(.createdAt) \(.url)"')
+
+          if [ -z "$ASSETS" ]; then
+            echo "No assets found or release does not exist."
+            exit 0
+          fi
+
+          echo "$ASSETS" | while IFS=' ' read -r name created_at url; do
+            # Compare dates
+            ASSET_DATE=$(date -d "$created_at" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "")
+            if [ -z "$ASSET_DATE" ]; then
+              continue
+            fi
+
+            if [[ "$ASSET_DATE" < "$CUTOFF_DATE" ]]; then
+              echo "Deleting old asset: $name (created: $created_at)"
+              gh release delete-asset "$RELEASE_TAG" "$name" --yes
+            else
+              echo "Keeping asset: $name (created: $created_at)"
+            fi
+          done
+
+          echo "Cleanup complete."
