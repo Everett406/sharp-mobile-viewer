@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.3.2';
+const APP_VERSION = '0.4.0';
 
 const App = {
   currentPage: 'welcome',
@@ -21,6 +21,7 @@ const App = {
   dispatchTime: null,
   currentPlyBlob: null,
   currentPlySize: 0,
+  currentViewJobId: null,
   viewerSettings: {
     bgColor: '#2b2928',
     fov: 75,
@@ -349,7 +350,7 @@ const JobManager = {
         if (action === 'resume') {
           this.resumeJob(jobId);
         } else if (action === 'view') {
-          showToast('3D 查看器将在 Phase 4 实现');
+          viewJob3D(jobId);
         } else if (action === 'retry') {
           this.retryJob(jobId);
         } else if (action === 'delete') {
@@ -380,7 +381,8 @@ const JobManager = {
       confirmMsg = `确定删除？将清除本地缓存的 PLY 文件（${formatBytes(job.plySize)}）。`;
     }
 
-    if (!confirm(confirmMsg)) return;
+    const confirmed = await showConfirm('删除记录', confirmMsg);
+    if (!confirmed) return;
 
     // Stop polling if this is the active job
     if (isActive && App.currentJobId === jobId) {
@@ -442,6 +444,10 @@ const JobManager = {
       updateStepStatus(4, 'active', '下载中...');
       updateStepStatus(5, 'pending', '等待中');
     }
+
+    // Reset status buttons (show cancel, hide view 3D)
+    document.getElementById('status-cancel').style.display = '';
+    document.getElementById('status-view-3d').style.display = 'none';
 
     Router.navigate('status');
 
@@ -660,26 +666,31 @@ function setupEventListeners() {
     Router.navigate('home');
     JobManager.renderHistoryList();
   });
+  document.getElementById('status-view-3d')?.addEventListener('click', () => {
+    if (App.currentJobId) viewJob3D(App.currentJobId);
+  });
 
   // ── Viewer page ──
-  document.getElementById('viewer-back')?.addEventListener('click', () => Router.navigate('home'));
+  document.getElementById('viewer-back')?.addEventListener('click', () => {
+    window.dispatchEvent(new Event('sharpview:dispose'));
+    Router.navigate('home');
+  });
   document.getElementById('viewer-settings-btn')?.addEventListener('click', () => {
+    syncViewerSettingsUI();
     document.getElementById('viewer-settings-overlay').style.display = 'block';
   });
   document.getElementById('viewer-settings-close')?.addEventListener('click', () => {
     document.getElementById('viewer-settings-overlay').style.display = 'none';
   });
   document.getElementById('viewer-reset')?.addEventListener('click', () => {
-    console.log('Reset view');
+    window.dispatchEvent(new Event('sharpview:reset-view'));
     showToast('视角已重置');
   });
   document.getElementById('viewer-download')?.addEventListener('click', () => {
-    console.log('Download PLY');
-    showToast('开始下载 PLY');
+    downloadCurrentPly();
   });
   document.getElementById('viewer-delete')?.addEventListener('click', () => {
-    console.log('Delete local cache');
-    showToast('已删除本地缓存');
+    deleteCurrentViewerCache();
   });
 
   // ── Viewer settings panel ──
@@ -688,28 +699,34 @@ function setupEventListeners() {
       document.querySelectorAll('[data-bg]').forEach(b => b.style.borderColor = 'transparent');
       btn.style.borderColor = 'var(--brand-500)';
       App.viewerSettings.bgColor = btn.dataset.bg;
+      dispatchViewerSettings();
     });
   });
   document.getElementById('viewer-fov')?.addEventListener('input', (e) => {
     App.viewerSettings.fov = parseInt(e.target.value);
     document.getElementById('viewer-fov-value').textContent = `${e.target.value}°`;
+    dispatchViewerSettings();
   });
   document.getElementById('viewer-scale')?.addEventListener('input', (e) => {
     App.viewerSettings.splatScale = parseFloat(e.target.value);
     document.getElementById('viewer-scale-value').textContent = e.target.value;
+    dispatchViewerSettings();
   });
   document.getElementById('viewer-alpha')?.addEventListener('input', (e) => {
     App.viewerSettings.alphaThreshold = parseFloat(e.target.value);
     document.getElementById('viewer-alpha-value').textContent = e.target.value;
+    dispatchViewerSettings();
   });
   document.getElementById('viewer-maxsize')?.addEventListener('input', (e) => {
     App.viewerSettings.maxScreenSpaceSize = parseInt(e.target.value);
     document.getElementById('viewer-maxsize-value').textContent = e.target.value;
+    dispatchViewerSettings();
   });
   document.getElementById('viewer-pointcloud-toggle')?.addEventListener('click', () => {
     const toggle = document.getElementById('viewer-pointcloud-toggle');
     toggle.classList.toggle('on');
     App.viewerSettings.pointCloudMode = toggle.classList.contains('on');
+    dispatchViewerSettings();
   });
 
   // ── Error page ──
@@ -800,8 +817,143 @@ async function processAndPreview(file) {
 }
 
 async function handleLoadPly() {
-  // Phase 4: Load local PLY file
-  showToast('加载本地 PLY 功能将在 Phase 4 实现');
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.ply';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    App.currentViewJobId = null;
+    App.currentPlyBlob = file;
+    App.currentPlySize = file.size;
+
+    // Navigate to viewer page
+    document.getElementById('viewer-title').textContent = file.name;
+    document.getElementById('viewer-placeholder').style.display = 'none';
+    Router.navigate('viewer');
+
+    // Read file as ArrayBuffer and dispatch to viewer
+    const arrayBuffer = await file.arrayBuffer();
+    window.dispatchEvent(new CustomEvent('sharpview:load-ply', {
+      detail: { arrayBuffer, fileName: file.name }
+    }));
+    showToast(`已加载: ${file.name} (${formatBytes(file.size)})`);
+  };
+  input.click();
+}
+
+/**
+ * View a completed job's 3D model in the viewer.
+ * Loads PLY from localStorage cache, or re-downloads from GitHub if needed.
+ */
+async function viewJob3D(jobId) {
+  const job = JobManager.get(jobId);
+  if (!job) return;
+
+  App.currentViewJobId = jobId;
+  document.getElementById('viewer-title').textContent = `${jobId}.ply`;
+
+  // Show loading state
+  const placeholder = document.getElementById('viewer-placeholder');
+  placeholder.innerHTML = `
+    <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center stepper-pulse" style="background:rgba(255,255,255,0.1)">
+      <i data-lucide="loader" class="w-8 h-8" style="color:rgba(255,255,255,0.6)"></i>
+    </div>
+    <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.5);margin:0">加载中...</p>`;
+  placeholder.style.display = 'flex';
+  if (window.lucide) lucide.createIcons();
+
+  Router.navigate('viewer');
+
+  // If we already have the PLY blob in memory (just downloaded), use it directly
+  if (App.currentPlyBlob && App.currentPlySize > 0) {
+    try {
+      const arrayBuffer = await App.currentPlyBlob.arrayBuffer();
+      window.dispatchEvent(new CustomEvent('sharpview:load-ply', {
+        detail: { arrayBuffer, fileName: `${jobId}.ply` }
+      }));
+      console.log('Loaded PLY from memory:', arrayBuffer.byteLength, 'bytes');
+      return;
+    } catch (e) {
+      console.log('Could not use in-memory PLY:', e);
+    }
+  }
+
+  // Try to load PLY from localStorage cache
+  try {
+    const cached = await Storage.get(`ply_${jobId}`);
+    if (cached) {
+      // Convert base64 to ArrayBuffer
+      const arrayBuffer = base64ToArrayBuffer(cached);
+      App.currentPlySize = arrayBuffer.byteLength;
+      window.dispatchEvent(new CustomEvent('sharpview:load-ply', {
+        detail: { arrayBuffer, fileName: `${jobId}.ply` }
+      }));
+      console.log('Loaded PLY from cache:', arrayBuffer.byteLength, 'bytes');
+      return;
+    }
+  } catch (e) {
+    console.log('No cached PLY:', e);
+  }
+
+  // Not cached — try to re-download from GitHub
+  const configured = await Settings.isConfigured();
+  if (!configured) {
+    showToast('PLY 未缓存，且 GitHub 未配置');
+    return;
+  }
+
+  try {
+    const config = App.config;
+    const assets = await GitHubAPI.checkJobAssets(config, jobId);
+    if (!assets.plyAsset) {
+      showToast('PLY 文件不存在于云端');
+      return;
+    }
+
+    showToast('正在重新下载 PLY...');
+    const plyBlob = await GitHubAPI.downloadAssetWithProgress(config, assets.plyAsset.id, (loaded) => {
+      const pct = assets.plyAsset.size > 0 ? Math.round((loaded / assets.plyAsset.size) * 100) : 0;
+      placeholder.innerHTML = `
+        <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center stepper-pulse" style="background:rgba(255,255,255,0.1)">
+          <i data-lucide="download" class="w-8 h-8" style="color:rgba(255,255,255,0.6)"></i>
+        </div>
+        <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.5);margin:0 0 4px 0">下载中...</p>
+        <p style="font:400 12px var(--font-mono);color:rgba(255,255,255,0.3);margin:0">${formatBytes(loaded)} / ${formatBytes(assets.plyAsset.size)} (${pct}%)</p>`;
+      if (window.lucide) lucide.createIcons();
+    });
+
+    App.currentPlyBlob = plyBlob;
+    App.currentPlySize = plyBlob.size;
+
+    // Cache it for next time
+    try {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result.split(',')[1];
+        Storage.set(`ply_${jobId}`, base64);
+      };
+      reader.readAsDataURL(plyBlob);
+    } catch (e) {
+      console.log('Could not cache PLY:', e);
+    }
+
+    const arrayBuffer = await plyBlob.arrayBuffer();
+    window.dispatchEvent(new CustomEvent('sharpview:load-ply', {
+      detail: { arrayBuffer, fileName: `${jobId}.ply` }
+    }));
+    showToast('PLY 下载完成');
+  } catch (e) {
+    console.error('Failed to download PLY:', e);
+    placeholder.innerHTML = `
+      <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center" style="background:rgba(255,255,255,0.1)">
+        <i data-lucide="alert-triangle" class="w-8 h-8" style="color:rgba(255,255,255,0.4)"></i>
+      </div>
+      <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.5);margin:0 0 4px 0">下载失败</p>
+      <p style="font:400 12px var(--font-sans);color:rgba(255,255,255,0.3);margin:0">${e.message}</p>`;
+    if (window.lucide) lucide.createIcons();
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -839,6 +991,10 @@ async function handleStartGenerationWithJobId(jobId) {
   updateStepStatus(3, 'pending', '等待中');
   updateStepStatus(4, 'pending', '等待中');
   updateStepStatus(5, 'pending', '等待中');
+
+  // Reset status buttons (show cancel, hide view 3D)
+  document.getElementById('status-cancel').style.display = '';
+  document.getElementById('status-view-3d').style.display = 'none';
 
   Router.navigate('status');
 
@@ -1002,8 +1158,16 @@ async function handleJobComplete(plyAsset) {
       return;
     }
 
-    // Download PLY blob
-    const plyBlob = await GitHubAPI.downloadAsset(config, plyAsset.id);
+    // Download PLY blob with progress
+    const totalSize = plyAsset.size || 0;
+    if (App.currentPage === 'status') updateStepStatus(4, 'active', `下载中... ${formatBytes(totalSize)}`);
+
+    const plyBlob = await GitHubAPI.downloadAssetWithProgress(config, plyAsset.id, (loaded) => {
+      if (App.currentPage === 'status') {
+        const pct = totalSize > 0 ? Math.round((loaded / totalSize) * 100) : 0;
+        updateStepStatus(4, 'active', `下载中... ${formatBytes(loaded)} / ${formatBytes(totalSize)} (${pct}%)`);
+      }
+    });
     const plySize = plyBlob.size;
     if (App.currentPage === 'status') updateStepStatus(4, 'done', formatBytes(plySize));
 
@@ -1035,6 +1199,11 @@ async function handleJobComplete(plyAsset) {
 
     if (App.currentPage === 'status') {
       updateStepStatus(5, 'done', '就绪');
+      // Show "查看 3D" button, hide cancel button
+      const cancelBtn = document.getElementById('status-cancel');
+      const viewBtn = document.getElementById('status-view-3d');
+      if (cancelBtn) cancelBtn.style.display = 'none';
+      if (viewBtn) viewBtn.style.display = 'flex';
       if (window.lucide) lucide.createIcons();
       showToast('3D 场景生成成功！');
     } else {
@@ -1130,6 +1299,15 @@ function dataURLtoBlob(dataURL) {
   return new Blob([bytes], { type: mime });
 }
 
+function base64ToArrayBuffer(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
 function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -1154,6 +1332,118 @@ function showToast(message) {
   toast.textContent = message;
   toast.style.opacity = '1';
   setTimeout(() => { toast.style.opacity = '0'; }, 2000);
+}
+
+function showConfirm(title, message) {
+  return new Promise((resolve) => {
+    const dialog = document.getElementById('confirm-dialog');
+    const titleEl = document.getElementById('confirm-title');
+    const msgEl = document.getElementById('confirm-message');
+    const okBtn = document.getElementById('confirm-ok');
+    const cancelBtn = document.getElementById('confirm-cancel');
+
+    titleEl.textContent = title || '确认';
+    msgEl.textContent = message || '确定要执行此操作吗？';
+    dialog.style.display = 'block';
+
+    const cleanup = () => {
+      dialog.style.display = 'none';
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+    };
+    const onOk = () => { cleanup(); resolve(true); };
+    const onCancel = () => { cleanup(); resolve(false); };
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// Viewer Helper Functions
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Dispatch viewer settings to the viewer module.
+ */
+function dispatchViewerSettings() {
+  window.dispatchEvent(new CustomEvent('sharpview:apply-settings', {
+    detail: { ...App.viewerSettings }
+  }));
+}
+
+/**
+ * Sync App.viewerSettings to the settings panel UI controls.
+ */
+function syncViewerSettingsUI() {
+  const s = App.viewerSettings;
+  // Background color
+  document.querySelectorAll('[data-bg]').forEach(btn => {
+    btn.style.borderColor = btn.dataset.bg === s.bgColor ? 'var(--brand-500)' : 'transparent';
+  });
+  // FOV
+  const fovEl = document.getElementById('viewer-fov');
+  if (fovEl) fovEl.value = s.fov;
+  document.getElementById('viewer-fov-value').textContent = `${s.fov}°`;
+  // Scale
+  const scaleEl = document.getElementById('viewer-scale');
+  if (scaleEl) scaleEl.value = s.splatScale;
+  document.getElementById('viewer-scale-value').textContent = s.splatScale.toFixed(1);
+  // Alpha
+  const alphaEl = document.getElementById('viewer-alpha');
+  if (alphaEl) alphaEl.value = s.alphaThreshold;
+  document.getElementById('viewer-alpha-value').textContent = s.alphaThreshold;
+  // Max size
+  const maxsizeEl = document.getElementById('viewer-maxsize');
+  if (maxsizeEl) maxsizeEl.value = s.maxScreenSpaceSize;
+  document.getElementById('viewer-maxsize-value').textContent = s.maxScreenSpaceSize;
+  // Point cloud
+  const pcToggle = document.getElementById('viewer-pointcloud-toggle');
+  if (pcToggle) pcToggle.classList.toggle('on', s.pointCloudMode);
+}
+
+/**
+ * Download the current PLY file to the device.
+ */
+function downloadCurrentPly() {
+  if (!App.currentPlyBlob) {
+    showToast('没有可下载的 PLY 文件');
+    return;
+  }
+  const fileName = App.currentViewJobId ? `${App.currentViewJobId}.ply` : 'model.ply';
+  const url = URL.createObjectURL(App.currentPlyBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast(`已下载: ${fileName} (${formatBytes(App.currentPlySize)})`);
+}
+
+/**
+ * Delete the current viewer's local PLY cache.
+ */
+async function deleteCurrentViewerCache() {
+  if (!App.currentViewJobId) {
+    showToast('本地文件无需删除缓存');
+    return;
+  }
+  const confirmed = await showConfirm('删除缓存', '确定删除本地缓存的 PLY 文件？');
+  if (!confirmed) return;
+
+  try {
+    await Storage.remove(`ply_${App.currentViewJobId}`);
+  } catch (e) {
+    console.log('No cache to remove:', e);
+  }
+  App.currentPlyBlob = null;
+  App.currentPlySize = 0;
+  window.dispatchEvent(new Event('sharpview:dispose'));
+  showToast('已删除本地缓存');
+  Router.navigate('home');
+  JobManager.renderHistoryList();
 }
 
 // ═══════════════════════════════════════════════════════════

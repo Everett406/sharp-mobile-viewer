@@ -288,7 +288,7 @@
           </div>
           <h1 style="font-family:var(--font-display);font-weight:500;font-size:28px;color:var(--foreground);margin:0 0 6px 0">SharpView</h1>
           <div class="flex items-center gap-2 mb-3">
-            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.3.2</span>
+            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.4.0</span>
             <span class="badge muted" style="background:var(--brand-100);color:var(--brand-700);font-size:11px;min-height:22px;padding:0 8px">最新版本</span>
           </div>
           <p style="font-family:var(--font-serif);font-weight:400;font-size:14px;color:var(--secondary-foreground);font-style:italic;margin:0;text-align:center">将照片转化为 3D 高斯泼溅场景</p>
@@ -460,6 +460,10 @@
           <i data-lucide="x" class="w-4 h-4"></i>
           取消等待
         </button>
+        <button id="status-view-3d" class="btn primary w-full flex items-center justify-center gap-2" style="min-height:44px;border-radius:16px;display:none">
+          <i data-lucide="box" class="w-4 h-4"></i>
+          查看 3D 场景
+        </button>
       </div>
     </div>
 
@@ -613,6 +617,20 @@
     </div>
 
     <!-- ═══════════════════════════════════════════════════════
+         Overlay: 确认对话框 (Confirm Dialog)
+         ═══════════════════════════════════════════════════════ -->
+    <div id="confirm-dialog" class="fixed inset-0 z-[60]" style="display:none;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px)">
+      <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] rounded-2xl p-5" style="background:var(--popover)">
+        <h3 id="confirm-title" style="font:600 16px var(--font-sans);color:var(--foreground);margin:0 0 8px 0">确认</h3>
+        <p id="confirm-message" style="font:400 14px var(--font-sans);color:var(--secondary-foreground);margin:0 0 20px 0;line-height:1.5">确定要执行此操作吗？</p>
+        <div class="flex gap-3">
+          <button id="confirm-cancel" class="btn secondary flex-1" style="min-height:40px;border-radius:12px">取消</button>
+          <button id="confirm-ok" class="btn primary flex-1" style="min-height:40px;border-radius:12px;background:var(--error-500)">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
          Bottom Tab Bar (Unified: 3 tabs)
          ═══════════════════════════════════════════════════════ -->
     <nav id="tab-bar" class="tab-bar" style="display:none">
@@ -633,7 +651,17 @@
 
   </div>
 
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+      "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.1.0/spark.module.js"
+    }
+  }
+  </script>
   <script src="scripts/github.js" defer></script>
   <script src="scripts/app.js" defer></script>
+  <script type="module" src="scripts/viewer.js"></script>
 </body>
 </html>
