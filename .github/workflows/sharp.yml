@@ -16,6 +16,8 @@ jobs:
   inference:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -26,19 +28,19 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Cache SHARP model
+      - name: Cache SHARP model weights
         uses: actions/cache@v4
         with:
           path: ~/.cache/torch/hub/checkpoints
-          key: sharp-model-${{ runner.os }}
+          key: sharp-model-v1
           restore-keys: |
             sharp-model-
 
-      - name: Install SHARP
+      - name: Clone and install SHARP
         run: |
           git clone https://github.com/apple/ml-sharp.git /tmp/ml-sharp
           cd /tmp/ml-sharp
-          pip install -e .
+          pip install -r requirements.txt
 
       - name: Create job workspace
         run: |
@@ -49,19 +51,32 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "Downloading input_${{ inputs.job_id }}.jpg from release ${{ env.RELEASE_TAG }}"
           gh release download ${{ env.RELEASE_TAG }} \
             --pattern "input_${{ inputs.job_id }}.jpg" \
             --dir jobs/${{ inputs.job_id }}/input/ \
             --clobber
 
-      - name: Run SHARP inference
+          # Verify the file is not empty
+          FILE_SIZE=$(stat -f%z "jobs/${{ inputs.job_id }}/input/input_${{ inputs.job_id }}.jpg" 2>/dev/null || stat -c%s "jobs/${{ inputs.job_id }}/input/input_${{ inputs.job_id }}.jpg" 2>/dev/null || echo 0)
+          echo "Input file size: $FILE_SIZE bytes"
+          if [ "$FILE_SIZE" -lt 100 ]; then
+            echo "ERROR: Input image is empty or too small ($FILE_SIZE bytes)"
+            echo "Error: Input image is empty or corrupted" > ${{ inputs.job_id }}.error.txt
+            gh release upload ${{ env.RELEASE_TAG }} ${{ inputs.job_id }}.error.txt --clobber
+            exit 1
+          fi
+
+      - name: Run SHARP inference (CPU)
         id: inference
         continue-on-error: true
         run: |
           cd /tmp/ml-sharp
           sharp predict \
             -i ${{ github.workspace }}/jobs/${{ inputs.job_id }}/input \
-            -o ${{ github.workspace }}/jobs/${{ inputs.job_id }}/output
+            -o ${{ github.workspace }}/jobs/${{ inputs.job_id }}/output \
+            --device cpu \
+            -v
 
       - name: Upload PLY to Release (on success)
         if: steps.inference.outcome == 'success'
@@ -70,10 +85,15 @@ jobs:
         run: |
           PLY_FILE=$(find jobs/${{ inputs.job_id }}/output -name "*.ply" | head -1)
           if [ -n "$PLY_FILE" ]; then
+            PLY_SIZE=$(stat -c%s "$PLY_FILE" 2>/dev/null || echo 0)
+            echo "PLY file size: $PLY_SIZE bytes"
             cp "$PLY_FILE" ${{ inputs.job_id }}.ply
             gh release upload ${{ env.RELEASE_TAG }} ${{ inputs.job_id }}.ply --clobber
+            echo "PLY uploaded successfully"
           else
-            echo "ERROR: No .ply file found in output" > ${{ inputs.job_id }}.error.txt
+            echo "ERROR: No .ply file found in output"
+            ls -la jobs/${{ inputs.job_id }}/output/
+            echo "Error: No PLY file generated" > ${{ inputs.job_id }}.error.txt
             gh release upload ${{ env.RELEASE_TAG }} ${{ inputs.job_id }}.error.txt --clobber
           fi
 
@@ -83,8 +103,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Error: SHARP inference failed" > ${{ inputs.job_id }}.error.txt
-          echo "Step: run_sharp_reconstruction" >> ${{ inputs.job_id }}.error.txt
+          echo "Step: run_sharp_inference" >> ${{ inputs.job_id }}.error.txt
           echo "Workflow: sharp.yml" >> ${{ inputs.job_id }}.error.txt
           echo "Run ID: ${{ github.run_id }}" >> ${{ inputs.job_id }}.error.txt
           echo "Repository: ${{ github.repository }}" >> ${{ inputs.job_id }}.error.txt
+          echo "Job ID: ${{ inputs.job_id }}" >> ${{ inputs.job_id }}.error.txt
           gh release upload ${{ env.RELEASE_TAG }} ${{ inputs.job_id }}.error.txt --clobber

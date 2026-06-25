@@ -88,10 +88,13 @@ const GitHubAPI = {
 
   /**
    * Upload a binary asset to the release.
+   * Converts Blob to ArrayBuffer for CapacitorHttp compatibility.
    * Returns the asset info.
    */
   async uploadAsset(config, releaseId, filename, blob) {
     const url = `https://uploads.github.com/repos/${config.repoOwner}/${config.repoName}/releases/${releaseId}/assets?name=${encodeURIComponent(filename)}`;
+    // CapacitorHttp doesn't serialize Blob bodies properly — use ArrayBuffer
+    const arrayBuffer = await blob.arrayBuffer();
     const resp = await fetch(url, {
       method: 'POST',
       headers: {
@@ -99,7 +102,7 @@ const GitHubAPI = {
         'Accept': 'application/vnd.github.v3+json',
         'Content-Type': 'application/octet-stream',
       },
-      body: blob,
+      body: arrayBuffer,
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));

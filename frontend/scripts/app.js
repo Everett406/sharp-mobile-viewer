@@ -8,16 +8,18 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.2.1';
+const APP_VERSION = '0.3.0';
 
 const App = {
   currentPage: 'welcome',
   config: null,
-  jobs: [],
-  history: [],
-  currentImage: null,   // { dataUrl, originalSize, compressedSize, width, height }
+  jobs: [],          // In-memory job list (loaded from storage)
+  currentImage: null,   // { dataUrl, blob, originalSize, compressedSize, width, height, fileName }
   currentJobId: null,
   pollTimer: null,
+  dispatchTime: null,
+  currentPlyBlob: null,
+  currentPlySize: 0,
   viewerSettings: {
     bgColor: '#2b2928',
     fov: 75,
@@ -206,6 +208,223 @@ const Settings = {
 };
 
 // ═══════════════════════════════════════════════════════════
+// Job Manager — persist and track jobs across sessions
+// ═══════════════════════════════════════════════════════════
+const JobManager = {
+  // Job states: 'uploading' | 'dispatching' | 'running' | 'downloading' | 'completed' | 'failed' | 'timeout'
+  async loadAll() {
+    const data = await Storage.get('sharpview_jobs');
+    App.jobs = Array.isArray(data) ? data : [];
+    return App.jobs;
+  },
+
+  async saveAll() {
+    await Storage.set('sharpview_jobs', App.jobs);
+  },
+
+  create(jobId, imageData) {
+    const job = {
+      id: jobId,
+      status: 'uploading',
+      createdAt: new Date().toISOString(),
+      imageThumbnail: imageData.dataUrl.substring(0, 100), // small preview
+      imageDataUrl: imageData.dataUrl, // full preview for history
+      originalSize: imageData.originalSize,
+      compressedSize: imageData.compressedSize,
+      width: imageData.width,
+      height: imageData.height,
+      runId: null,
+      plySize: null,
+      errorLog: null,
+      completedAt: null,
+    };
+    App.jobs.unshift(job);
+    this.saveAll();
+    return job;
+  },
+
+  update(jobId, updates) {
+    const job = App.jobs.find(j => j.id === jobId);
+    if (job) {
+      Object.assign(job, updates);
+      this.saveAll();
+    }
+    return job;
+  },
+
+  get(jobId) {
+    return App.jobs.find(j => j.id === jobId);
+  },
+
+  getActiveJobs() {
+    return App.jobs.filter(j =>
+      j.status === 'uploading' || j.status === 'dispatching' ||
+      j.status === 'running' || j.status === 'downloading'
+    );
+  },
+
+  getStatusText(status) {
+    const map = {
+      'uploading': '上传中',
+      'dispatching': '触发中',
+      'running': '推理中',
+      'downloading': '下载中',
+      'completed': '已完成',
+      'failed': '失败',
+      'timeout': '超时',
+    };
+    return map[status] || status;
+  },
+
+  getStatusBadgeClass(status) {
+    if (status === 'completed') return 'badge-success';
+    if (status === 'failed' || status === 'timeout') return 'badge-error';
+    return 'badge-running';
+  },
+
+  renderHistoryList() {
+    const container = document.getElementById('home-history-list');
+    if (!container) return;
+
+    if (App.jobs.length === 0) {
+      container.innerHTML = `
+        <div class="text-center py-12">
+          <div class="inline-flex items-center justify-center w-12 h-12 mb-3 rounded-full" style="background:var(--muted)">
+            <i data-lucide="image-off" class="w-6 h-6" style="color:var(--muted-foreground)"></i>
+          </div>
+          <p class="text-sm" style="color:var(--muted-foreground)">暂无生成记录</p>
+          <p class="text-xs mt-1" style="color:var(--muted-foreground)">选择图片开始你的第一个 3D 场景</p>
+        </div>`;
+      if (window.lucide) lucide.createIcons();
+      return;
+    }
+
+    container.innerHTML = App.jobs.map(job => {
+      const statusText = this.getStatusText(job.status);
+      const badgeClass = this.getStatusBadgeClass(job.status);
+      const time = new Date(job.createdAt);
+      const timeStr = `${time.getMonth()+1}/${time.getDate()} ${String(time.getHours()).padStart(2,'0')}:${String(time.getMinutes()).padStart(2,'0')}`;
+      const isActive = ['uploading','dispatching','running','downloading'].includes(job.status);
+
+      return `
+        <div class="card" data-job-id="${job.id}" style="cursor:pointer;flex-direction:row;align-items:center;gap:12px;padding:14px">
+          <div class="w-14 h-14 rounded-xl overflow-hidden shrink-0" style="background:var(--bg-300)">
+            <img src="${job.imageDataUrl || ''}" class="w-full h-full object-cover" alt="">
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="status-badge ${badgeClass}">${statusText}</span>
+              <span style="font:400 11px var(--font-mono);color:var(--muted-foreground)">${timeStr}</span>
+            </div>
+            <p style="font:600 13px var(--font-mono);color:var(--foreground);margin:0 0 2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${job.id}</p>
+            <p style="font:400 12px var(--font-sans);color:var(--muted-foreground);margin:0">
+              ${job.plySize ? formatBytes(job.plySize) + ' PLY' : formatBytes(job.compressedSize) + ' 图片'}
+            </p>
+          </div>
+          <div class="shrink-0">
+            ${isActive
+              ? `<button class="btn secondary" style="min-height:32px;padding:0 12px;font-size:12px;border-radius:10px" data-action="resume">查看进度</button>`
+              : job.status === 'completed'
+                ? `<button class="btn primary" style="min-height:32px;padding:0 12px;font-size:12px;border-radius:10px" data-action="view">查看 3D</button>`
+                : `<button class="btn secondary" style="min-height:32px;padding:0 12px;font-size:12px;border-radius:10px" data-action="retry">重试</button>`
+            }
+          </div>
+        </div>`;
+    }).join('');
+
+    if (window.lucide) lucide.createIcons();
+
+    // Attach click handlers
+    container.querySelectorAll('[data-job-id]').forEach(card => {
+      const jobId = card.dataset.jobId;
+      const job = this.get(jobId);
+
+      card.querySelector('[data-action]')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = e.currentTarget.dataset.action;
+        if (action === 'resume') {
+          this.resumeJob(jobId);
+        } else if (action === 'view') {
+          // Phase 4: open viewer with PLY
+          showToast('3D 查看器将在 Phase 4 实现');
+        } else if (action === 'retry') {
+          this.retryJob(jobId);
+        }
+      });
+
+      card.addEventListener('click', () => {
+        if (job && ['uploading','dispatching','running','downloading'].includes(job.status)) {
+          this.resumeJob(jobId);
+        }
+      });
+    });
+  },
+
+  resumeJob(jobId) {
+    const job = this.get(jobId);
+    if (!job) return;
+
+    App.currentJobId = jobId;
+    App.dispatchTime = new Date(job.createdAt);
+
+    // Update status page
+    document.getElementById('status-job-id').textContent = jobId;
+
+    // Restore step display based on job status
+    if (job.status === 'uploading') {
+      updateStepStatus(1, 'done', '已完成');
+      updateStepStatus(2, 'active', '上传中...');
+      updateStepStatus(3, 'pending', '等待中');
+      updateStepStatus(4, 'pending', '等待中');
+      updateStepStatus(5, 'pending', '等待中');
+    } else if (job.status === 'dispatching') {
+      updateStepStatus(1, 'done', '已完成');
+      updateStepStatus(2, 'done', formatBytes(job.compressedSize));
+      updateStepStatus(3, 'active', '触发中...');
+      updateStepStatus(4, 'pending', '等待中');
+      updateStepStatus(5, 'pending', '等待中');
+    } else if (job.status === 'running') {
+      updateStepStatus(1, 'done', '已完成');
+      updateStepStatus(2, 'done', formatBytes(job.compressedSize));
+      updateStepStatus(3, 'active', '已等待 --:--');
+      updateStepStatus(4, 'pending', '等待中');
+      updateStepStatus(5, 'pending', '等待中');
+    } else if (job.status === 'downloading') {
+      updateStepStatus(1, 'done', '已完成');
+      updateStepStatus(2, 'done', formatBytes(job.compressedSize));
+      updateStepStatus(3, 'done', '完成');
+      updateStepStatus(4, 'active', '下载中...');
+      updateStepStatus(5, 'pending', '等待中');
+    }
+
+    Router.navigate('status');
+
+    // Resume polling if still active
+    if (['dispatching','running'].includes(job.status)) {
+      startJobPolling();
+    }
+  },
+
+  retryJob(jobId) {
+    const job = this.get(jobId);
+    if (!job) return;
+    // Reset job status and restart the flow
+    this.update(jobId, { status: 'uploading', errorLog: null, runId: null });
+    App.currentJobId = jobId;
+    App.currentImage = {
+      dataUrl: job.imageDataUrl,
+      originalSize: job.originalSize,
+      compressedSize: job.compressedSize,
+      width: job.width,
+      height: job.height,
+    };
+    // Re-convert dataUrl to blob
+    App.currentImage.blob = dataURLtoBlob(job.imageDataUrl);
+    handleStartGenerationWithJobId(jobId);
+  },
+};
+
+// ═══════════════════════════════════════════════════════════
 // Dark Mode
 // ═══════════════════════════════════════════════════════════
 const Theme = {
@@ -382,12 +601,17 @@ function setupEventListeners() {
 
   // ── Status page ──
   document.getElementById('status-back')?.addEventListener('click', () => {
-    if (App.pollTimer) { clearInterval(App.pollTimer); App.pollTimer = null; }
+    // Don't stop polling — let it run in background
     Router.navigate('home');
+    JobManager.renderHistoryList();
   });
   document.getElementById('status-cancel')?.addEventListener('click', () => {
     if (App.pollTimer) { clearInterval(App.pollTimer); App.pollTimer = null; }
+    if (App.currentJobId) {
+      JobManager.update(App.currentJobId, { status: 'failed', errorLog: '用户取消等待' });
+    }
     Router.navigate('home');
+    JobManager.renderHistoryList();
   });
 
   // ── Viewer page ──
@@ -534,7 +758,7 @@ async function handleLoadPly() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// Generation Handler (Phase 2: Upload + Trigger + Poll)
+// Generation Handler (Phase 3: Upload + Trigger + Poll + Persist)
 // ═══════════════════════════════════════════════════════════
 async function handleStartGeneration() {
   if (!App.currentImage) {
@@ -542,7 +766,6 @@ async function handleStartGeneration() {
     return;
   }
 
-  // Check configuration
   const configured = await Settings.isConfigured();
   if (!configured) {
     ErrorPage.show('CONFIG_INVALID', '请先在设置页配置 GitHub 连接');
@@ -550,8 +773,15 @@ async function handleStartGeneration() {
   }
 
   const jobId = ImageProc.generateJobId();
+  await handleStartGenerationWithJobId(jobId);
+}
+
+async function handleStartGenerationWithJobId(jobId) {
   App.currentJobId = jobId;
   App.dispatchTime = new Date();
+
+  // Create job record
+  JobManager.create(jobId, App.currentImage);
 
   // Update status page
   document.getElementById('status-job-id').textContent = jobId;
@@ -572,10 +802,12 @@ async function handleStartGeneration() {
     const uploadFilename = `input_${jobId}.jpg`;
     await GitHubAPI.uploadAsset(config, release.id, uploadFilename, App.currentImage.blob);
     updateStepStatus(2, 'done', formatBytes(App.currentImage.compressedSize));
+    JobManager.update(jobId, { status: 'dispatching' });
 
     // Step 3: Trigger workflow_dispatch
     updateStepStatus(3, 'active', '触发中...');
     await GitHubAPI.triggerWorkflow(config, jobId);
+    JobManager.update(jobId, { status: 'running' });
     updateStepStatus(3, 'active', '已等待 00:00');
 
     // Start polling for workflow completion
@@ -583,15 +815,18 @@ async function handleStartGeneration() {
   } catch (e) {
     const code = (e instanceof GitHubError) ? e.code : 'UNKNOWN_ERROR';
     const log = e.message + '\n' + (e.stack || '');
+    JobManager.update(jobId, { status: 'failed', errorLog: log });
     ErrorPage.show(code, log);
   }
 }
 
 function startJobPolling() {
+  // Clear any existing timer
+  if (App.pollTimer) { clearInterval(App.pollTimer); App.pollTimer = null; }
+
   const startTime = Date.now();
   const maxTimeout = (App.config?.maxTimeout || 30) * 60 * 1000;
   let runId = null;
-  let lastStatusCheck = 0;
   let assetCheckCount = 0;
 
   App.pollTimer = setInterval(async () => {
@@ -604,20 +839,25 @@ function startJobPolling() {
     if (elapsed > maxTimeout) {
       clearInterval(App.pollTimer);
       App.pollTimer = null;
+      JobManager.update(App.currentJobId, { status: 'timeout' });
       ErrorPage.show('JOB_TIMEOUT', `等待超时 (${App.config.maxTimeout} 分钟)`);
       return;
     }
 
-    document.getElementById('status-step-3-time').textContent = `已等待 ${timeStr}`;
+    // Only update status page if we're on it
+    if (App.currentPage === 'status') {
+      document.getElementById('status-step-3-time').textContent = `已等待 ${timeStr}`;
+    }
 
     try {
       const config = App.config;
 
-      // First, try to find the workflow run
+      // Try to find the workflow run
       if (!runId) {
         const run = await GitHubAPI.findRun(config, App.dispatchTime);
         if (run) {
           runId = run.id;
+          JobManager.update(App.currentJobId, { runId: runId });
           console.log('Found workflow run:', runId);
         }
       }
@@ -628,34 +868,32 @@ function startJobPolling() {
         if (status) {
           if (status.status === 'completed') {
             if (status.conclusion === 'success') {
-              updateStepStatus(3, 'done', `完成 (${timeStr})`);
-              // Move to step 4: download PLY
+              if (App.currentPage === 'status') updateStepStatus(3, 'done', `完成 (${timeStr})`);
               clearInterval(App.pollTimer);
               App.pollTimer = null;
               await handleJobComplete();
               return;
             } else {
-              // Failure or cancelled
               clearInterval(App.pollTimer);
               App.pollTimer = null;
-              // Check for error asset
               await handleJobError();
               return;
             }
           }
-          // Still running, update label
-          document.getElementById('status-step-3-time').textContent = `${status.status === 'queued' ? '排队中' : '推理中'} ${timeStr}`;
+          // Still running
+          if (App.currentPage === 'status') {
+            document.getElementById('status-step-3-time').textContent = `${status.status === 'queued' ? '排队中' : '推理中'} ${timeStr}`;
+          }
         }
       }
 
-      // Also check for output assets every few iterations
-      // (in case the run status API is delayed)
+      // Also check for output assets periodically
       assetCheckCount++;
       if (assetCheckCount >= 5) {
         assetCheckCount = 0;
         const assets = await GitHubAPI.checkJobAssets(config, App.currentJobId);
         if (assets.plyAsset) {
-          updateStepStatus(3, 'done', `完成 (${timeStr})`);
+          if (App.currentPage === 'status') updateStepStatus(3, 'done', `完成 (${timeStr})`);
           clearInterval(App.pollTimer);
           App.pollTimer = null;
           await handleJobComplete(assets.plyAsset);
@@ -670,23 +908,23 @@ function startJobPolling() {
       }
     } catch (e) {
       console.error('Polling error:', e);
-      // Don't stop polling on transient errors
     }
-  }, 3000); // Poll every 3 seconds
+  }, 5000); // Poll every 5 seconds
 }
 
 async function handleJobComplete(plyAsset) {
   try {
     const config = App.config;
-    updateStepStatus(4, 'active', '下载中...');
+    JobManager.update(App.currentJobId, { status: 'downloading' });
+    if (App.currentPage === 'status') updateStepStatus(4, 'active', '下载中...');
 
-    // Find the PLY asset if not provided
     if (!plyAsset) {
       const assets = await GitHubAPI.checkJobAssets(config, App.currentJobId);
       plyAsset = assets.plyAsset;
     }
 
     if (!plyAsset) {
+      JobManager.update(App.currentJobId, { status: 'failed', errorLog: '未找到 PLY 文件' });
       ErrorPage.show('DOWNLOAD_FAILED', '未找到 PLY 文件，推理可能尚未完成');
       return;
     }
@@ -694,31 +932,33 @@ async function handleJobComplete(plyAsset) {
     // Download PLY blob
     const plyBlob = await GitHubAPI.downloadAsset(config, plyAsset.id);
     const plySize = plyBlob.size;
-    updateStepStatus(4, 'done', formatBytes(plySize));
+    if (App.currentPage === 'status') updateStepStatus(4, 'done', formatBytes(plySize));
 
-    // Step 5: "Render" (Phase 4 will implement actual rendering)
-    updateStepStatus(5, 'active', '准备渲染...');
+    // Step 5: "Render"
+    if (App.currentPage === 'status') updateStepStatus(5, 'active', '准备渲染...');
 
-    // Store PLY data for viewer
     App.currentPlyBlob = plyBlob;
     App.currentPlySize = plySize;
 
-    // For now, show a success message
-    updateStepStatus(5, 'done', '就绪');
-    if (window.lucide) lucide.createIcons();
+    // Mark job as completed
+    JobManager.update(App.currentJobId, {
+      status: 'completed',
+      plySize: plySize,
+      completedAt: new Date().toISOString(),
+    });
 
-    // Navigate to viewer after short delay
-    setTimeout(() => {
-      // Store in IndexedDB or local storage for Phase 4
-      // For now, just show a toast and go to viewer
+    if (App.currentPage === 'status') {
+      updateStepStatus(5, 'done', '就绪');
+      if (window.lucide) lucide.createIcons();
       showToast('3D 场景生成成功！');
-      document.getElementById('viewer-title').textContent = App.currentJobId;
-      document.getElementById('viewer-placeholder').querySelector('p').textContent = 'PLY 已下载，等待渲染器集成 (Phase 4)';
-      Router.navigate('viewer');
-    }, 500);
+    }
+
+    // Refresh history if on home
+    if (App.currentPage === 'home') JobManager.renderHistoryList();
 
   } catch (e) {
     const code = (e instanceof GitHubError) ? e.code : 'DOWNLOAD_FAILED';
+    JobManager.update(App.currentJobId, { status: 'failed', errorLog: e.message });
     ErrorPage.show(code, e.message);
   }
 }
@@ -731,15 +971,16 @@ async function handleJobError(errorAsset) {
     if (errorAsset) {
       errorLog = await GitHubAPI.downloadErrorLog(config, errorAsset.id);
     } else {
-      // Try to find error asset
       const assets = await GitHubAPI.checkJobAssets(config, App.currentJobId);
       if (assets.errorAsset) {
         errorLog = await GitHubAPI.downloadErrorLog(config, assets.errorAsset.id);
       }
     }
 
+    JobManager.update(App.currentJobId, { status: 'failed', errorLog });
     ErrorPage.show('JOB_FAILED', errorLog);
   } catch (e) {
+    JobManager.update(App.currentJobId, { status: 'failed', errorLog: '推理失败，无法获取详细日志' });
     ErrorPage.show('JOB_FAILED', '推理失败，无法获取详细日志');
   }
 }
@@ -812,9 +1053,23 @@ function showToast(message) {
 // ═══════════════════════════════════════════════════════════
 async function initApp() {
   await Settings.load();
+  await JobManager.loadAll();
   Theme.apply(App.config.darkMode || 'system');
   Settings.populateUI();
   setupEventListeners();
+
+  // Render history on home page
+  JobManager.renderHistoryList();
+
+  // Resume any active jobs in background
+  const activeJobs = JobManager.getActiveJobs();
+  if (activeJobs.length > 0) {
+    const job = activeJobs[0];
+    App.currentJobId = job.id;
+    App.dispatchTime = new Date(job.createdAt);
+    console.log('Resuming active job:', job.id, job.status);
+    startJobPolling();
+  }
 
   const configured = await Settings.isConfigured();
   if (configured) {
