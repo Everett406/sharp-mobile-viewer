@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.9.5';
+const APP_VERSION = '0.9.6';
 
 const App = {
   currentPage: 'welcome',
@@ -810,7 +810,12 @@ function setupEventListeners() {
   });
 
   // ── Gyroscope toggle ──
+  window._gyroToggling = false;
   window.toggleGyro = async function() {
+    // Prevent double-fire (onclick + addEventListener, or rapid clicks)
+    if (window._gyroToggling) return;
+    window._gyroToggling = true;
+
     const debugEl = document.getElementById('gyro-debug');
     const btn = document.getElementById('viewer-gyro');
     const label = document.getElementById('viewer-gyro-label');
@@ -827,47 +832,39 @@ function setupEventListeners() {
 
     if (!debugEl || !btn) {
       alert('错误: 找不到陀螺仪按钮');
+      window._gyroToggling = false;
       return;
     }
 
     if (!window.SharpViewViewer) {
       showToast('渲染器未加载');
       debugLog('错误: window.SharpViewViewer 不存在');
+      window._gyroToggling = false;
       return;
     }
 
-    // Diagnostic: show what properties SharpViewViewer has
-    const keys = Object.keys(window.SharpViewViewer);
-    const hasGyro = 'gyro' in window.SharpViewViewer;
-    const gyroVal = typeof window.SharpViewViewer.gyro;
-    const hasToggle = typeof window.SharpViewViewer.toggleGyro;
-
-    debugEl.textContent = '';
-    debugLog('=== 陀螺仪诊断 ===');
-    debugLog(`SharpViewViewer keys: ${keys.join(',').substring(0, 120)}`);
-    debugLog(`has gyro: ${hasGyro}, type: ${gyroVal}`);
-    debugLog(`toggleGyro type: ${hasToggle}`);
-    debugLog(`Capacitor: ${typeof window.Capacitor}`);
-
-    // Just call toggleGyro directly, don't check .gyro property
     if (typeof window.SharpViewViewer.toggleGyro !== 'function') {
-      debugLog('错误: toggleGyro 不是函数');
       showToast('陀螺仪方法不存在');
+      debugLog('错误: toggleGyro 不是函数');
+      window._gyroToggling = false;
       return;
     }
 
-    // Check if already enabled by calling the method
-    // toggleGyro returns true=enabled, false=disabled
+    // Check current state BEFORE calling toggle
+    const isCurrentlyOn = window.SharpViewViewer.gyro && window.SharpViewViewer.gyro.enabled;
+
     try {
-      showToast('正在开启陀螺仪...');
+      if (!isCurrentlyOn) {
+        showToast('正在开启陀螺仪...');
+      }
       const enabled = await window.SharpViewViewer.toggleGyro();
       if (enabled) {
         btn.style.background = 'rgba(201,100,66,0.4)';
         label.textContent = '陀螺仪 ON';
+        debugEl.textContent = '';
         debugLog(`✅ 已开启 (${window.SharpViewViewer.gyro.method || 'web'})`);
         showToast('陀螺仪已开启');
 
-        // Monitor data for 5 seconds
         let dataCount = 0;
         const mon = setInterval(() => {
           if (window.SharpViewViewer.gyro && window.SharpViewViewer.gyro.refReady) {
@@ -879,7 +876,6 @@ function setupEventListeners() {
           debugLog(dataCount === 0 ? '⚠️ 5秒无数据' : `✅ 收到${dataCount}次数据`);
         }, 5000);
 
-        // Live values
         window._gyroInt = setInterval(() => {
           const g = window.SharpViewViewer.gyro;
           if (g) {
@@ -887,7 +883,6 @@ function setupEventListeners() {
           }
         }, 1000);
       } else {
-        // Disabled
         btn.style.background = 'rgba(255,255,255,0.15)';
         label.textContent = '陀螺仪';
         if (window._gyroInt) { clearInterval(window._gyroInt); window._gyroInt = null; }
@@ -897,6 +892,8 @@ function setupEventListeners() {
     } catch (e) {
       debugLog('❌ 异常: ' + (e.message || e));
       showToast('陀螺仪异常');
+    } finally {
+      window._gyroToggling = false;
     }
   };
 
