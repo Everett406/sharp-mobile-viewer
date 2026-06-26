@@ -104,11 +104,23 @@ jobs:
         run: |
           source /tmp/sharp-venv/bin/activate
           cd /tmp/ml-sharp
+          
+          # Create a clean temp directory with ONLY this job's input file
+          # to prevent SHARP from processing leftover files from other jobs
+          JOBDIR="/tmp/sharp_input_${{ inputs.job_id }}"
+          mkdir -p "$JOBDIR"
+          cp "${{ github.workspace }}/jobs/input_${{ inputs.job_id }}.jpg" "$JOBDIR/"
+          
+          echo "Input directory contents:"
+          ls -la "$JOBDIR/"
+          
           sharp predict \
-            -i ${{ github.workspace }}/jobs \
+            -i "$JOBDIR" \
             -o ${{ github.workspace }}/jobs/${{ inputs.job_id }}/output \
             --device cpu \
             -v
+          
+          rm -rf "$JOBDIR"
 
       - name: Upload PLY to Release (on success)
         if: steps.inference.outcome == 'success'
@@ -117,13 +129,17 @@ jobs:
         run: |
           gh release create ${{ env.RELEASE_TAG }} --title "SHARP Splat Jobs" --notes "Auto-generated" --prerelease 2>/dev/null || true
 
+          echo "Output directory contents:"
+          ls -la jobs/${{ inputs.job_id }}/output/
+          
           PLY_FILE=$(find jobs/${{ inputs.job_id }}/output -name "*.ply" | head -1)
           if [ -n "$PLY_FILE" ]; then
             PLY_SIZE=$(stat -c%s "$PLY_FILE" 2>/dev/null || echo 0)
-            echo "PLY file size: $PLY_SIZE bytes"
+            echo "PLY file: $PLY_FILE ($PLY_SIZE bytes)"
+            echo "Uploading as: ${{ inputs.job_id }}.ply"
             cp "$PLY_FILE" ${{ inputs.job_id }}.ply
             gh release upload ${{ env.RELEASE_TAG }} ${{ inputs.job_id }}.ply --clobber
-            echo "PLY uploaded successfully"
+            echo "PLY uploaded successfully as ${{ inputs.job_id }}.ply"
           else
             echo "ERROR: No .ply file found in output"
             ls -la jobs/${{ inputs.job_id }}/output/

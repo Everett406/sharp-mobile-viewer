@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.4.6';
+const APP_VERSION = '0.4.7';
 
 const App = {
   currentPage: 'welcome',
@@ -967,7 +967,16 @@ async function viewJob3D(jobId) {
   const job = JobManager.get(jobId);
   if (!job) return;
 
+  // CRITICAL: Reset previous model state to avoid showing stale data
   App.currentViewJobId = jobId;
+  App.currentPlyBlob = null;
+  App.currentPlySize = 0;
+
+  // Dispose any existing viewer content
+  if (App.viewerModuleLoaded) {
+    window.dispatchEvent(new Event('sharpview:dispose'));
+  }
+
   document.getElementById('viewer-title').textContent = `${jobId}.ply`;
 
   // Show loading state with step indicator
@@ -1006,21 +1015,6 @@ async function viewJob3D(jobId) {
     if (window.lucide) lucide.createIcons();
     return false;
   });
-
-  // If we already have the PLY blob in memory (just downloaded), use it directly
-  if (App.currentPlyBlob && App.currentPlySize > 0) {
-    try {
-      const arrayBuffer = await App.currentPlyBlob.arrayBuffer();
-      if (!(await modulePromise)) return;
-      window.dispatchEvent(new CustomEvent('sharpview:load-ply', {
-        detail: { arrayBuffer, fileName: `${jobId}.ply` }
-      }));
-      console.log('Loaded PLY from memory:', arrayBuffer.byteLength, 'bytes');
-      return;
-    } catch (e) {
-      console.log('Could not use in-memory PLY:', e);
-    }
-  }
 
   // Try to load PLY from IndexedDB cache
   try {

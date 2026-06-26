@@ -234,6 +234,9 @@ const Viewer = {
       return;
     }
 
+    // Ensure render loop is running (might have been stopped by dispose)
+    this.startRenderLoop();
+
     // Remove existing splat
     if (this.splat) {
       try { this.splat.dispose(); } catch (e) {}
@@ -332,17 +335,22 @@ const Viewer = {
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
       const maxDim = Math.max(size.x, size.y, size.z, 0.001);
-      const distance = maxDim * 1.8;
+      const distance = maxDim * 2.0;
 
-      // Position camera in front of the model
+      // Position camera in front of the model, looking down -Z
       this.camera.position.set(center.x, center.y, center.z + distance);
+      this.camera.up.set(0, 1, 0);
+      this.camera.lookAt(center);
       this.controls.target.copy(center);
       this.controls.update();
 
-      console.log('[Viewer] Auto-framed:', { center, size, distance });
+      console.log('[Viewer] Auto-framed:', { center: [center.x.toFixed(3), center.y.toFixed(3), center.z.toFixed(3)], size: [size.x.toFixed(3), size.y.toFixed(3), size.z.toFixed(3)], distance: distance.toFixed(3) });
     } catch (e) {
       console.log('[Viewer] Auto-frame failed:', e.message);
-      this.camera.position.set(0, 0, 3);
+      // Fallback: reasonable default for SHARP output
+      this.camera.position.set(0, 0, 2);
+      this.camera.up.set(0, 1, 0);
+      this.camera.lookAt(0, 0, 0);
       this.controls.target.set(0, 0, 0);
       this.controls.update();
     }
@@ -352,7 +360,9 @@ const Viewer = {
     if (this.splat && this.splat.isInitialized) {
       this.autoFrame();
     } else if (this.camera) {
-      this.camera.position.set(0, 0, 3);
+      this.camera.position.set(0, 0, 2);
+      this.camera.up.set(0, 1, 0);
+      this.camera.lookAt(0, 0, 0);
       this.controls.target.set(0, 0, 0);
       this.controls.update();
     }
@@ -405,17 +415,18 @@ const Viewer = {
     }
   },
 
+  /**
+   * Clean up current model but keep renderer alive for reuse.
+   * Called when switching models or leaving viewer page.
+   */
   dispose() {
-    this.stopRenderLoop();
-    if (this.resizeObserver) {
-      this.resizeObserver.disconnect();
-      this.resizeObserver = null;
-    }
+    // Only stop render loop and remove splat, keep renderer/scene alive
     if (this.splat) {
       try { this.splat.dispose(); } catch (e) {}
       this.scene.remove(this.splat);
       this.splat = null;
     }
+    this.stopRenderLoop();
     if (this.placeholder) this.placeholder.style.display = 'flex';
     if (this.canvas) this.canvas.style.display = 'none';
     if (this.infoEl) this.infoEl.style.display = 'none';
