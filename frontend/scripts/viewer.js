@@ -119,15 +119,15 @@ const Viewer = {
       });
       this.scene.add(this.spark);
 
-      // Controls
+      // Controls — match reference project defaults
       this.controls = new OrbitControls(this.camera, this.canvas);
       this.controls.enableDamping = true;
       this.controls.dampingFactor = 0.1;
       this.controls.target.set(0, 0, -1);
-      this.controls.minDistance = 0.01;
-      this.controls.maxDistance = 100;
       this.controls.enablePan = true;
-      this.controls.rotateSpeed = 0.5;
+      this.controls.enableZoom = true;
+      this.controls.zoomToCursor = true;
+      this.controls.rotateSpeed = 1.0;
       this.controls.zoomSpeed = 1.0;
       this.controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
@@ -317,13 +317,14 @@ const Viewer = {
   },
 
   /**
-   * Auto-frame camera to fit the splat bounding box.
+   * Frame the model: keep camera near origin (matching the photo capture viewpoint),
+   * set OrbitControls target to model center, and move camera to a close distance
+   * that fits the model in view. This gives the "photo-aligned" default view.
    */
   autoFrame() {
     if (!this.splat || !this.camera) return;
 
     try {
-      // Check isInitialized (boolean) before calling getBoundingBox
       if (!this.splat.isInitialized) {
         console.log('[Viewer] Splat not yet initialized, skipping autoFrame');
         return;
@@ -335,23 +336,32 @@ const Viewer = {
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
       const maxDim = Math.max(size.x, size.y, size.z, 0.001);
-      const distance = maxDim * 2.0;
 
-      // Position camera in front of the model, looking down -Z
+      // Calculate distance so the model fills ~80% of the viewport.
+      // Based on FOV: distance = (maxDim / 2) / tan(fov/2)
+      const fovRad = THREE.MathUtils.degToRad(this.camera.fov);
+      const distance = (maxDim / 2) / Math.tan(fovRad / 2) / 0.8;
+
+      // Position camera along the -Z axis from model center
+      // This matches the original photo capture direction (camera looking at scene from +Z)
       this.camera.position.set(center.x, center.y, center.z + distance);
       this.camera.up.set(0, 1, 0);
       this.camera.lookAt(center);
       this.controls.target.copy(center);
       this.controls.update();
 
-      console.log('[Viewer] Auto-framed:', { center: [center.x.toFixed(3), center.y.toFixed(3), center.z.toFixed(3)], size: [size.x.toFixed(3), size.y.toFixed(3), size.z.toFixed(3)], distance: distance.toFixed(3) });
+      console.log('[Viewer] Auto-framed:', {
+        center: [center.x.toFixed(3), center.y.toFixed(3), center.z.toFixed(3)],
+        size: [size.x.toFixed(3), size.y.toFixed(3), size.z.toFixed(3)],
+        distance: distance.toFixed(3)
+      });
     } catch (e) {
       console.log('[Viewer] Auto-frame failed:', e.message);
-      // Fallback: reasonable default for SHARP output
-      this.camera.position.set(0, 0, 2);
+      // Fallback: look down -Z from origin (SHARP default viewpoint)
+      this.camera.position.set(0, 0, 0.5);
       this.camera.up.set(0, 1, 0);
-      this.camera.lookAt(0, 0, 0);
-      this.controls.target.set(0, 0, 0);
+      this.camera.lookAt(0, 0, -1);
+      this.controls.target.set(0, 0, -1);
       this.controls.update();
     }
   },
@@ -360,10 +370,10 @@ const Viewer = {
     if (this.splat && this.splat.isInitialized) {
       this.autoFrame();
     } else if (this.camera) {
-      this.camera.position.set(0, 0, 2);
+      this.camera.position.set(0, 0, 0.5);
       this.camera.up.set(0, 1, 0);
-      this.camera.lookAt(0, 0, 0);
-      this.controls.target.set(0, 0, 0);
+      this.camera.lookAt(0, 0, -1);
+      this.controls.target.set(0, 0, -1);
       this.controls.update();
     }
   },
