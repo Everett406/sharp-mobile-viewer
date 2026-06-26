@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.7.2';
+const APP_VERSION = '0.8.0';
 
 const App = {
   currentPage: 'welcome',
@@ -373,7 +373,7 @@ const JobManager = {
       const isActive = ['uploading','dispatching','running','downloading'].includes(job.status);
 
       return `
-        <div class="card" data-job-id="${job.id}" style="cursor:pointer;flex-direction:row;align-items:center;gap:12px;padding:14px">
+        <div class="card card-press" data-job-id="${job.id}" style="cursor:pointer;flex-direction:row;align-items:center;gap:12px;padding:14px">
           <div class="w-14 h-14 rounded-xl overflow-hidden shrink-0" style="background:var(--bg-300)">
             <img src="${job.imageDataUrl || ''}" class="w-full h-full object-cover" alt="">
           </div>
@@ -402,6 +402,11 @@ const JobManager = {
     }).join('');
 
     if (window.lucide) lucide.createIcons();
+
+    // Stagger animation for list items
+    container.querySelectorAll('[data-job-id]').forEach((card, i) => {
+      card.style.animation = `slideUp 0.3s ease-out ${i * 0.05}s both`;
+    });
 
     // Attach click handlers
     container.querySelectorAll('[data-job-id]').forEach(card => {
@@ -783,64 +788,86 @@ function setupEventListeners() {
     deleteCurrentViewerCache();
   });
 
-  // ── Gyroscope toggle ──
+  // ── Gyroscope toggle (with on-screen debug) ──
   document.getElementById('viewer-gyro')?.addEventListener('click', async () => {
     if (!App.viewerModuleLoaded || !window.SharpViewViewer) {
       showToast('渲染器未就绪');
       return;
     }
-    showToast('正在开启陀螺仪...');
-    const enabled = await window.SharpViewViewer.toggleGyro();
+
+    const debugEl = document.getElementById('gyro-debug');
     const btn = document.getElementById('viewer-gyro');
     const label = document.getElementById('viewer-gyro-label');
-    if (enabled) {
-      btn.style.background = 'rgba(201,100,66,0.4)';
-      btn.style.borderColor = 'rgba(201,100,66,0.6)';
-      label.textContent = '陀螺仪 开';
-      showToast('陀螺仪已开启，倾斜手机查看视差');
+
+    // Show debug overlay
+    const debugLog = (msg) => {
+      console.log('[GyroDebug]', msg);
+      if (debugEl) {
+        debugEl.style.display = 'block';
+        const time = new Date().toLocaleTimeString();
+        debugEl.textContent += `[${time}] ${msg}\n`;
+        debugEl.scrollTop = debugEl.scrollHeight;
+      }
+    };
+
+    if (!window.SharpViewViewer.gyro.enabled) {
+      // Enable
+      debugEl.textContent = ''; // Clear
+      debugLog('开始开启陀螺仪...');
+      debugLog(`window.Capacitor: ${typeof window.Capacitor}`);
+      if (window.Capacitor) {
+        debugLog(`Capacitor.platform: ${window.Capacitor.platform}`);
+        debugLog(`Plugins: ${Object.keys(window.Capacitor.Plugins || {}).join(', ')}`);
+      }
+
+      const enabled = await window.SharpViewViewer.toggleGyro();
+      if (enabled) {
+        btn.style.background = 'rgba(201,100,66,0.4)';
+        btn.style.borderColor = 'rgba(201,100,66,0.6)';
+        label.textContent = '陀螺仪 开';
+        debugLog(`已开启 (方法: ${window.SharpViewViewer.gyro.method || 'web'})`);
+        showToast('陀螺仪已开启');
+
+        // Monitor data flow for 5 seconds
+        let dataCount = 0;
+        const monitorInterval = setInterval(() => {
+          const raw = window.SharpViewViewer.gyro.raw;
+          if (raw.beta !== 0 || raw.gamma !== 0) dataCount++;
+        }, 500);
+        setTimeout(() => {
+          clearInterval(monitorInterval);
+          if (dataCount === 0) {
+            debugLog('⚠️ 5秒内未收到传感器数据！');
+            debugLog('可能原因: 传感器不可用或权限被拒');
+          } else {
+            debugLog(`✅ 收到 ${dataCount} 次数据更新`);
+          }
+        }, 5000);
+
+        // Update debug with live values every second
+        window._gyroDebugInterval = setInterval(() => {
+          const raw = window.SharpViewViewer.gyro.raw;
+          const smooth = window.SharpViewViewer.gyro.smooth;
+          debugLog(`raw: β=${raw.beta?.toFixed(1)}° γ=${raw.gamma?.toFixed(1)}° | smooth: β=${smooth.beta?.toFixed(3)} γ=${smooth.gamma?.toFixed(3)}`);
+        }, 1000);
+      } else {
+        debugLog('❌ 开启失败');
+        showToast('陀螺仪开启失败');
+      }
     } else {
+      // Disable
+      await window.SharpViewViewer.toggleGyro();
       btn.style.background = 'rgba(255,255,255,0.15)';
       btn.style.borderColor = 'rgba(255,255,255,0.2)';
       label.textContent = '陀螺仪';
+      if (window._gyroDebugInterval) {
+        clearInterval(window._gyroDebugInterval);
+        window._gyroDebugInterval = null;
+      }
+      // Hide debug after 3 seconds
+      setTimeout(() => { if (debugEl) debugEl.style.display = 'none'; }, 3000);
       showToast('陀螺仪已关闭');
     }
-  });
-
-  // ── Landscape toggle ──
-  let isLandscape = false;
-  document.getElementById('viewer-rotate')?.addEventListener('click', async () => {
-    const btn = document.getElementById('viewer-rotate');
-    const label = document.getElementById('viewer-rotate-label');
-    if (!App.viewerModuleLoaded || !window.SharpViewViewer) {
-      showToast('渲染器未就绪');
-      return;
-    }
-    const result = await window.SharpViewViewer.toggleLandscape();
-    if (result === null) {
-      showToast('横屏切换失败');
-      return;
-    }
-    isLandscape = result;
-    if (isLandscape) {
-      btn.style.background = 'rgba(201,100,66,0.4)';
-      btn.style.borderColor = 'rgba(201,100,66,0.6)';
-      label.textContent = '竖屏';
-      showToast('已切换横屏');
-    } else {
-      btn.style.background = 'rgba(255,255,255,0.15)';
-      btn.style.borderColor = 'rgba(255,255,255,0.2)';
-      label.textContent = '横屏';
-      showToast('已切换竖屏');
-    }
-  });
-
-  // Reset landscape when leaving viewer
-  document.getElementById('viewer-back')?.addEventListener('click', async () => {
-    if (isLandscape && App.viewerModuleLoaded && window.SharpViewViewer) {
-      await window.SharpViewViewer.resetOrientation();
-      isLandscape = false;
-    }
-    Router.navigate('home');
   });
 
   // ── Viewer status listener (receives loading/error/ready from viewer.js) ──

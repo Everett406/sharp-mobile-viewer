@@ -45,7 +45,10 @@
       flex-direction: column;
       background: var(--bg-100);
     }
-    .page.tab-page.active { display: flex; }
+    .page.tab-page.active {
+      display: flex;
+      animation: pageFadeIn 0.3s ease-out;
+    }
 
     /* Non-tab pages: overlay entire screen (including tab bar area) */
     .page:not(.tab-page) {
@@ -56,10 +59,54 @@
       flex-direction: column;
       background: var(--bg-100);
     }
-    .page:not(.tab-page).active { display: flex; }
+    .page:not(.tab-page).active {
+      display: flex;
+      animation: pageSlideIn 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
+    }
 
     /* Tab bar pinned at bottom of flex container */
     #tab-bar { flex-shrink: 0; }
+
+    /* Page transition animations */
+    @keyframes pageFadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes pageSlideIn {
+      from { opacity: 0; transform: translateX(30px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes scaleIn {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    /* Toast animation */
+    .toast { animation: toastSlideUp 0.3s cubic-bezier(0.22, 0.61, 0.36, 1); }
+    @keyframes toastSlideUp {
+      from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+      to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+
+    /* Card press effect */
+    .card-press { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+    .card-press:active { transform: scale(0.97); }
+
+    /* Button press effect */
+    .btn { transition: transform 0.1s ease, opacity 0.15s ease; }
+    .btn:active { transform: scale(0.96); }
+
+    /* Tab item transition */
+    .tab-item { transition: color 0.2s ease, transform 0.1s ease; }
+    .tab-item:active { transform: scale(0.9); }
   </style>
 </head>
 <body>
@@ -288,7 +335,7 @@
           </div>
           <h1 style="font-family:var(--font-display);font-weight:500;font-size:28px;color:var(--foreground);margin:0 0 6px 0">SharpView</h1>
           <div class="flex items-center gap-2 mb-3">
-            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.7.2</span>
+            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.8.0</span>
             <span class="badge muted" style="background:var(--brand-100);color:var(--brand-700);font-size:11px;min-height:22px;padding:0 8px">最新版本</span>
           </div>
           <p style="font-family:var(--font-serif);font-weight:400;font-size:14px;color:var(--secondary-foreground);font-style:italic;margin:0;text-align:center">将照片转化为 3D 高斯泼溅场景</p>
@@ -510,11 +557,10 @@
           <i data-lucide="smartphone" class="w-4 h-4"></i>
           <span class="text-xs" id="viewer-gyro-label">陀螺仪</span>
         </button>
-        <button id="viewer-rotate" class="btn secondary flex items-center gap-2" style="background:rgba(255,255,255,0.15);color:#fff;border-color:rgba(255,255,255,0.2);min-height:40px;border-radius:12px">
-          <i data-lucide="rotate-cw" class="w-4 h-4"></i>
-          <span class="text-xs" id="viewer-rotate-label">横屏</span>
-        </button>
       </div>
+
+      <!-- 陀螺仪调试浮层 -->
+      <div id="gyro-debug" style="position:absolute;top:50px;left:8px;right:8px;z-index:30;display:none;background:rgba(0,0,0,0.85);color:#0f0;font:11px/1.4 monospace;padding:8px;border-radius:8px;max-height:200px;overflow-y:auto;pointer-events:none;white-space:pre-wrap"></div>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════
