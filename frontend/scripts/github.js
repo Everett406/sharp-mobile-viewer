@@ -231,14 +231,23 @@ const GitHubAPI = {
 
   /**
    * Download an asset with progress callback.
-   * Uses XHR for progress events (CapacitorHttp patches fetch but not XHR).
-   * Falls back to fetch if XHR fails.
+   *
+   * In Capacitor WebView:
+   *   - fetch() is patched by CapacitorHttp (native HTTP, no CORS, but no progress)
+   *   - XHR is NOT patched (goes through WebView, hits CORS on cross-origin)
+   *
+   * So XHR will fail with CORS → fall back to fetch (CapacitorHttp) →
+   * downloads entire blob at once, no real-time progress possible.
+   *
+   * We try XHR first (in case CORS headers are present), and if it works
+   * we get real progress. If XHR fails, we use fetch and report only
+   * start/complete (no fake percentages).
    */
-  downloadAssetWithProgress(config, assetId, onProgress) {
+  downloadAssetWithProgress(config, assetId, onProgress, totalSize) {
     return new Promise(async (resolve, reject) => {
       const url = `${this._repoUrl(config)}/releases/assets/${assetId}`;
 
-      // Try XHR first for progress support
+      // Try XHR first — it may work if CORS headers are present
       try {
         const xhr = new XMLHttpRequest();
         xhr.open('GET', url, true);
@@ -246,15 +255,21 @@ const GitHubAPI = {
         xhr.setRequestHeader('Authorization', `token ${config.githubToken}`);
         xhr.setRequestHeader('Accept', 'application/octet-stream');
 
+        let xhrProgressWorking = false;
+
         xhr.onprogress = (e) => {
-          if (e.lengthComputable && onProgress) {
-            onProgress(e.loaded);
+          // Report progress regardless of lengthComputable
+          // (we know the total from the asset metadata)
+          if (onProgress) {
+            xhrProgressWorking = true;
+            const total = e.total || totalSize || 0;
+            onProgress(e.loaded, total, true); // true = real progress
           }
         };
 
         xhr.onload = () => {
           if (xhr.status >= 200 && xhr.status < 300) {
-            if (onProgress) onProgress(xhr.response.size);
+            if (onProgress) onProgress(xhr.response.size, xhr.response.size, true);
             resolve(xhr.response);
           } else {
             reject(new GitHubError('DOWNLOAD_FAILED', `下载失败: ${xhr.status}`));
@@ -262,16 +277,25 @@ const GitHubAPI = {
         };
 
         xhr.onerror = () => {
-          // XHR failed (possibly CORS), fall back to fetch
-          console.log('XHR download failed, falling back to fetch');
-          this.downloadAsset(config, assetId).then(resolve).catch(reject);
+          // XHR failed (CORS), fall back to fetch (CapacitorHttp)
+          console.log('[Download] XHR failed (likely CORS), using fetch');
+          if (onProgress) onProgress(0, totalSize || 0, false); // false = no real progress
+
+          this.downloadAsset(config, assetId).then(blob => {
+            if (onProgress) onProgress(blob.size, blob.size, false);
+            resolve(blob);
+          }).catch(reject);
         };
 
         xhr.send();
       } catch (e) {
-        // XHR not available, fall back to fetch
-        console.log('XHR not available, using fetch');
-        this.downloadAsset(config, assetId).then(resolve).catch(reject);
+        console.log('[Download] XHR not available, using fetch');
+        if (onProgress) onProgress(0, totalSize || 0, false);
+
+        this.downloadAsset(config, assetId).then(blob => {
+          if (onProgress) onProgress(blob.size, blob.size, false);
+          resolve(blob);
+        }).catch(reject);
       }
     });
   },

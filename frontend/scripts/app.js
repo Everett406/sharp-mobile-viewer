@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.4.2';
+const APP_VERSION = '0.4.3';
 
 const App = {
   currentPage: 'welcome',
@@ -688,11 +688,37 @@ function setupEventListeners() {
     if (App.viewerModuleLoaded) window.dispatchEvent(new Event('sharpview:reset-view'));
     showToast('视角已重置');
   });
-  document.getElementById('viewer-download')?.addEventListener('click', () => {
-    downloadCurrentPly();
-  });
   document.getElementById('viewer-delete')?.addEventListener('click', () => {
     deleteCurrentViewerCache();
+  });
+
+  // ── Viewer status listener (receives loading/error/ready from viewer.js) ──
+  window.addEventListener('sharpview:status', (e) => {
+    const { type, message, detail } = e.detail;
+    const placeholder = document.getElementById('viewer-placeholder');
+    if (!placeholder) return;
+
+    if (type === 'loading') {
+      placeholder.innerHTML = `
+        <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center stepper-pulse" style="background:rgba(255,255,255,0.1)">
+          <i data-lucide="loader" class="w-8 h-8" style="color:rgba(255,255,255,0.6)"></i>
+        </div>
+        <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.7);margin:0 0 6px 0">${message}</p>
+        ${detail ? `<p style="font:400 12px var(--font-mono);color:rgba(255,255,255,0.4);margin:0">${detail}</p>` : ''}`;
+      placeholder.style.display = 'flex';
+      if (window.lucide) lucide.createIcons();
+    } else if (type === 'error') {
+      placeholder.innerHTML = `
+        <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center" style="background:rgba(255,80,80,0.15)">
+          <i data-lucide="alert-triangle" class="w-8 h-8" style="color:rgba(255,120,120,0.8)"></i>
+        </div>
+        <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.7);margin:0 0 6px 0">${message}</p>
+        ${detail ? `<p style="font:400 12px var(--font-mono);color:rgba(255,255,255,0.4);margin:0">${detail}</p>` : ''}`;
+      placeholder.style.display = 'flex';
+      if (window.lucide) lucide.createIcons();
+    } else if (type === 'ready') {
+      placeholder.style.display = 'none';
+    }
   });
 
   // ── Viewer settings panel ──
@@ -966,11 +992,18 @@ async function viewJob3D(jobId) {
       return;
     }
 
-    renderLoadingStep(1, `下载 PLY: 0%`);
-    const plyBlob = await GitHubAPI.downloadAssetWithProgress(config, assets.plyAsset.id, (loaded) => {
-      const pct = assets.plyAsset.size > 0 ? Math.round((loaded / assets.plyAsset.size) * 100) : 0;
-      renderLoadingStep(1, `下载 PLY: ${formatBytes(loaded)} / ${formatBytes(assets.plyAsset.size)} (${pct}%)`);
-    });
+    const totalSize = assets.plyAsset.size || 0;
+    renderLoadingStep(1, `下载 PLY (共 ${formatBytes(totalSize)})...`);
+    const plyBlob = await GitHubAPI.downloadAssetWithProgress(config, assets.plyAsset.id, (loaded, total, isReal) => {
+      if (isReal && total > 0) {
+        // Real progress from XHR
+        const pct = Math.round((loaded / total) * 100);
+        renderLoadingStep(1, `下载 PLY: ${formatBytes(loaded)} / ${formatBytes(total)} (${pct}%)`);
+      } else {
+        // No real progress (CapacitorHttp fetch fallback) — show honest status
+        renderLoadingStep(1, `下载中 (共 ${formatBytes(totalSize)})...`);
+      }
+    }, totalSize);
 
     App.currentPlyBlob = plyBlob;
     App.currentPlySize = plyBlob.size;
@@ -1209,14 +1242,18 @@ async function handleJobComplete(plyAsset) {
 
     // Download PLY blob with progress
     const totalSize = plyAsset.size || 0;
-    if (App.currentPage === 'status') updateStepStatus(4, 'active', `下载中... ${formatBytes(totalSize)}`);
+    if (App.currentPage === 'status') updateStepStatus(4, 'active', `下载中 (共 ${formatBytes(totalSize)})...`);
 
-    const plyBlob = await GitHubAPI.downloadAssetWithProgress(config, plyAsset.id, (loaded) => {
+    const plyBlob = await GitHubAPI.downloadAssetWithProgress(config, plyAsset.id, (loaded, total, isReal) => {
       if (App.currentPage === 'status') {
-        const pct = totalSize > 0 ? Math.round((loaded / totalSize) * 100) : 0;
-        updateStepStatus(4, 'active', `下载中... ${formatBytes(loaded)} / ${formatBytes(totalSize)} (${pct}%)`);
+        if (isReal && total > 0) {
+          const pct = Math.round((loaded / total) * 100);
+          updateStepStatus(4, 'active', `下载中 ${formatBytes(loaded)} / ${formatBytes(total)} (${pct}%)`);
+        } else {
+          updateStepStatus(4, 'active', `下载中 (共 ${formatBytes(totalSize)})...`);
+        }
       }
-    });
+    }, totalSize);
     const plySize = plyBlob.size;
     if (App.currentPage === 'status') updateStepStatus(4, 'done', formatBytes(plySize));
 
@@ -1483,26 +1520,6 @@ function syncViewerSettingsUI() {
   // Point cloud
   const pcToggle = document.getElementById('viewer-pointcloud-toggle');
   if (pcToggle) pcToggle.classList.toggle('on', s.pointCloudMode);
-}
-
-/**
- * Download the current PLY file to the device.
- */
-function downloadCurrentPly() {
-  if (!App.currentPlyBlob) {
-    showToast('没有可下载的 PLY 文件');
-    return;
-  }
-  const fileName = App.currentViewJobId ? `${App.currentViewJobId}.ply` : 'model.ply';
-  const url = URL.createObjectURL(App.currentPlyBlob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  showToast(`已下载: ${fileName} (${formatBytes(App.currentPlySize)})`);
 }
 
 /**

@@ -1,7 +1,12 @@
 /**
  * SharpView - 3D Viewer Module (Spark + Three.js)
- * Loaded as ES module via importmap.
- * Communicates with app.js via window events.
+ * Loaded as ES module via importmap. All libs are bundled locally.
+ * Communicates with app.js via window events:
+ *   - sharpview:load-ply      (app → viewer) load PLY from ArrayBuffer
+ *   - sharpview:reset-view    (app → viewer) reset camera
+ *   - sharpview:apply-settings(app → viewer) apply viewer settings
+ *   - sharpview:dispose       (app → viewer) cleanup
+ *   - sharpview:status        (viewer → app) loading/error status updates
  */
 
 import * as THREE from "three";
@@ -32,67 +37,91 @@ const Viewer = {
     maxScreenSpaceSize: 512,
   },
 
+  /**
+   * Send status update to app.js so it can show the user what's happening.
+   */
+  _notifyStatus(type, message, detail) {
+    window.dispatchEvent(new CustomEvent('sharpview:status', {
+      detail: { type, message, detail: detail || '' }
+    }));
+  },
+
   init() {
-    if (this.initialized) return;
+    if (this.initialized) return true;
 
-    this.container = document.getElementById('viewer-canvas-container');
-    this.placeholder = document.getElementById('viewer-placeholder');
-    this.canvas = document.getElementById('viewer-canvas');
-    this.infoEl = document.getElementById('viewer-info');
-    this.fpsEl = document.getElementById('viewer-fps');
+    try {
+      this.container = document.getElementById('viewer-canvas-container');
+      this.placeholder = document.getElementById('viewer-placeholder');
+      this.canvas = document.getElementById('viewer-canvas');
+      this.infoEl = document.getElementById('viewer-info');
+      this.fpsEl = document.getElementById('viewer-fps');
 
-    if (!this.container) return;
+      if (!this.container || !this.canvas) {
+        this._notifyStatus('error', '找不到 Canvas 容器');
+        return false;
+      }
 
-    // Scene
-    this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(this.settings.bgColor);
+      // Check container dimensions
+      const w = this.container.clientWidth;
+      const h = this.container.clientHeight;
+      if (w < 10 || h < 10) {
+        this._notifyStatus('error', 'Canvas 容器尺寸异常', `${w}x${h}`);
+        return false;
+      }
 
-    // Camera
-    this.camera = new THREE.PerspectiveCamera(
-      this.settings.fov,
-      this.container.clientWidth / this.container.clientHeight,
-      0.01, 1000
-    );
-    this.camera.position.set(0, 0, 3);
+      // Scene
+      this.scene = new THREE.Scene();
+      this.scene.background = new THREE.Color(this.settings.bgColor);
 
-    // Renderer
-    this.renderer = new THREE.WebGLRenderer({
-      canvas: this.canvas,
-      antialias: false,
-      alpha: false,
-    });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+      // Camera
+      this.camera = new THREE.PerspectiveCamera(this.settings.fov, w / h, 0.01, 1000);
+      this.camera.position.set(0, 0, 3);
 
-    // Spark renderer (Spark 2.0 API: only renderer + sortRadial are used here)
-    this.spark = new SparkRenderer({
-      renderer: this.renderer,
-      sortRadial: true,
-    });
-    this.scene.add(this.spark);
+      // Renderer
+      this.renderer = new THREE.WebGLRenderer({
+        canvas: this.canvas,
+        antialias: false,
+        alpha: false,
+      });
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      this.renderer.setSize(w, h);
 
-    // Controls
-    this.controls = new OrbitControls(this.camera, this.canvas);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.1;
-    this.controls.target.set(0, 0, 0);
-    this.controls.minDistance = 0.1;
-    this.controls.maxDistance = 50;
-    this.controls.enablePan = true;
-    this.controls.rotateSpeed = 0.5;
-    this.controls.zoomSpeed = 1.0;
+      // Spark renderer
+      this.spark = new SparkRenderer({
+        renderer: this.renderer,
+        sortRadial: true,
+      });
+      this.scene.add(this.spark);
 
-    // Handle resize
-    window.addEventListener('resize', () => this.onResize());
+      // Controls
+      this.controls = new OrbitControls(this.camera, this.canvas);
+      this.controls.enableDamping = true;
+      this.controls.dampingFactor = 0.1;
+      this.controls.target.set(0, 0, 0);
+      this.controls.minDistance = 0.1;
+      this.controls.maxDistance = 50;
+      this.controls.enablePan = true;
+      this.controls.rotateSpeed = 0.5;
+      this.controls.zoomSpeed = 1.0;
 
-    this.initialized = true;
-    console.log('Viewer initialized');
+      // Handle resize
+      window.addEventListener('resize', () => this.onResize());
+
+      this.initialized = true;
+      console.log('[Viewer] Initialized successfully', `${w}x${h}`);
+      return true;
+    } catch (e) {
+      console.error('[Viewer] Init failed:', e);
+      this._notifyStatus('error', '渲染器初始化失败', e.message);
+      return false;
+    }
   },
 
   onResize() {
     if (!this.container || !this.camera || !this.renderer) return;
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
+    if (w < 10 || h < 10) return;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
@@ -102,48 +131,78 @@ const Viewer = {
    * Load a PLY file from an ArrayBuffer.
    */
   async loadPLY(arrayBuffer, fileName = 'model.ply') {
-    this.init();
-    if (!this.initialized) {
-      console.error('Viewer not initialized');
+    console.log('[Viewer] loadPLY called:', fileName, arrayBuffer.byteLength, 'bytes');
+
+    if (!this.init()) {
+      console.error('[Viewer] Cannot load PLY: init failed');
       return;
     }
 
     // Remove existing splat
     if (this.splat) {
+      try { this.splat.dispose(); } catch (e) {}
       this.scene.remove(this.splat);
       this.splat = null;
     }
 
     // Show canvas, hide placeholder
-    this.placeholder.style.display = 'none';
+    if (this.placeholder) this.placeholder.style.display = 'none';
     this.canvas.style.display = 'block';
-    this.infoEl.style.display = 'block';
+    if (this.infoEl) this.infoEl.style.display = 'block';
 
-    console.log('Loading PLY:', fileName, 'size:', arrayBuffer.byteLength, 'bytes');
+    this._notifyStatus('loading', '正在解析 PLY 数据...');
 
-    // Create SplatMesh from raw bytes
-    this.splat = new SplatMesh({
-      fileBytes: new Uint8Array(arrayBuffer),
-      fileName: fileName,
-      onLoad: (mesh) => {
-        console.log('PLY loaded successfully');
-        // Auto-frame the scene after load
+    try {
+      // Create SplatMesh from raw bytes
+      console.log('[Viewer] Creating SplatMesh...');
+      this.splat = new SplatMesh({
+        fileBytes: new Uint8Array(arrayBuffer),
+        fileName: fileName,
+        onLoad: (mesh) => {
+          console.log('[Viewer] PLY onLoad callback fired');
+          this.autoFrame();
+          this._notifyStatus('ready', '3D 场景已就绪');
+        },
+        onProgress: (e) => {
+          if (e && e.total > 0) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            console.log('[Viewer] PLY parsing:', pct + '%');
+          }
+        },
+      });
+
+      // Common orientation fix for SHARP output
+      this.splat.quaternion.set(1, 0, 0, 0);
+      this.scene.add(this.splat);
+
+      console.log('[Viewer] SplatMesh added to scene, awaiting initialization...');
+
+      // Await the initialized promise (Spark API: splat.initialized)
+      if (this.splat.initialized) {
+        await this.splat.initialized;
+        console.log('[Viewer] SplatMesh initialized promise resolved');
+      }
+
+      // Start render loop
+      this.startRenderLoop();
+
+      // Auto-frame after a short delay to ensure data is ready
+      setTimeout(() => {
         this.autoFrame();
-      },
-      onProgress: (e) => {
-        if (e.total > 0) {
-          const pct = Math.round((e.loaded / e.total) * 100);
-          console.log(`Loading: ${pct}%`);
-        }
-      },
-    });
+        this._notifyStatus('ready', '3D 场景已就绪');
+      }, 200);
 
-    // Common orientation fix for SHARP output
-    this.splat.quaternion.set(1, 0, 0, 0);
-    this.scene.add(this.splat);
+    } catch (e) {
+      console.error('[Viewer] PLY load failed:', e);
+      this._notifyStatus('error', 'PLY 解析失败', e.message || String(e));
 
-    // Start render loop
-    this.startRenderLoop();
+      // Show error in placeholder
+      if (this.placeholder) {
+        this.placeholder.style.display = 'flex';
+        this.canvas.style.display = 'none';
+        if (this.infoEl) this.infoEl.style.display = 'none';
+      }
+    }
   },
 
   /**
@@ -154,27 +213,34 @@ const Viewer = {
 
     try {
       const box = this.splat.getBoundingBox();
-      if (!box) return;
+      if (!box) {
+        console.log('[Viewer] No bounding box available');
+        return;
+      }
 
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
-      const maxDim = Math.max(size.x, size.y, size.z);
-      const distance = maxDim * 1.5 || 3;
+      const maxDim = Math.max(size.x, size.y, size.z, 0.001);
+      const distance = maxDim * 1.5;
 
       this.camera.position.set(center.x, center.y, center.z + distance);
       this.controls.target.copy(center);
       this.controls.update();
 
-      console.log('Auto-framed:', { center, size, distance });
+      console.log('[Viewer] Auto-framed:', { center, size, distance });
     } catch (e) {
-      console.log('Auto-frame failed:', e);
+      console.log('[Viewer] Auto-frame failed:', e.message);
+      // Fallback: default camera position
+      this.camera.position.set(0, 0, 3);
+      this.controls.target.set(0, 0, 0);
+      this.controls.update();
     }
   },
 
   resetView() {
     if (this.splat) {
       this.autoFrame();
-    } else {
+    } else if (this.camera) {
       this.camera.position.set(0, 0, 3);
       this.controls.target.set(0, 0, 0);
       this.controls.update();
@@ -189,7 +255,6 @@ const Viewer = {
 
     const animate = () => {
       this.animationId = requestAnimationFrame(animate);
-
       this.controls.update();
       this.renderer.render(this.scene, this.camera);
 
@@ -205,6 +270,7 @@ const Viewer = {
       }
     };
     animate();
+    console.log('[Viewer] Render loop started');
   },
 
   stopRenderLoop() {
@@ -219,27 +285,18 @@ const Viewer = {
    */
   applySettings(settings) {
     Object.assign(this.settings, settings);
-
     if (!this.initialized) return;
 
-    // Background color
     this.scene.background = new THREE.Color(this.settings.bgColor);
-
-    // FOV
     this.camera.fov = this.settings.fov;
     this.camera.updateProjectionMatrix();
 
-    // Spark renderer settings (Spark 2.0: maxStdDev controls splat rendering size)
     if (this.spark) {
       this.spark.maxStdDev = Math.sqrt(8) * this.settings.splatScale;
     }
-
-    // Splat opacity for point cloud mode
     if (this.splat) {
       this.splat.opacity = this.settings.pointCloudMode ? 0.3 : 1.0;
     }
-
-    console.log('Settings applied:', this.settings);
   },
 
   /**
@@ -248,7 +305,7 @@ const Viewer = {
   dispose() {
     this.stopRenderLoop();
     if (this.splat) {
-      try { this.splat.dispose(); } catch (e) { console.log('Splat dispose:', e); }
+      try { this.splat.dispose(); } catch (e) {}
       this.scene.remove(this.splat);
       this.splat = null;
     }
@@ -265,10 +322,13 @@ window.SharpViewViewer = Viewer;
 export { Viewer as SharpViewViewer };
 export default Viewer;
 
-// Listen for events from app.js
-window.addEventListener('sharpview:load-ply', (e) => {
+// ═══════════════════════════════════════════════════════════
+// Event listeners — app.js dispatches these
+// ═══════════════════════════════════════════════════════════
+
+window.addEventListener('sharpview:load-ply', async (e) => {
   const { arrayBuffer, fileName } = e.detail;
-  Viewer.loadPLY(arrayBuffer, fileName);
+  await Viewer.loadPLY(arrayBuffer, fileName);
 });
 
 window.addEventListener('sharpview:reset-view', () => {
@@ -283,4 +343,4 @@ window.addEventListener('sharpview:dispose', () => {
   Viewer.dispose();
 });
 
-console.log('SharpView Viewer module loaded (Spark + Three.js)');
+console.log('[Viewer] SharpView Viewer module loaded (Spark + Three.js, local)');
