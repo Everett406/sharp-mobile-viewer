@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.5.2';
+const APP_VERSION = '0.6.0';
 
 const App = {
   currentPage: 'welcome',
@@ -755,6 +755,28 @@ function setupEventListeners() {
   });
   document.getElementById('viewer-delete')?.addEventListener('click', () => {
     deleteCurrentViewerCache();
+  });
+
+  // ── Gyroscope toggle ──
+  document.getElementById('viewer-gyro')?.addEventListener('click', () => {
+    if (!App.viewerModuleLoaded || !window.SharpViewViewer) {
+      showToast('渲染器未就绪');
+      return;
+    }
+    const enabled = window.SharpViewViewer.toggleGyro();
+    const btn = document.getElementById('viewer-gyro');
+    const label = document.getElementById('viewer-gyro-label');
+    if (enabled) {
+      btn.style.background = 'rgba(201,100,66,0.4)';
+      btn.style.borderColor = 'rgba(201,100,66,0.6)';
+      label.textContent = '陀螺仪 开';
+      showToast('陀螺仪已开启，倾斜手机查看视差');
+    } else {
+      btn.style.background = 'rgba(255,255,255,0.15)';
+      btn.style.borderColor = 'rgba(255,255,255,0.2)';
+      label.textContent = '陀螺仪';
+      showToast('陀螺仪已关闭');
+    }
   });
 
   // ── Viewer status listener (receives loading/error/ready from viewer.js) ──

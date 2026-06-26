@@ -288,7 +288,7 @@
           </div>
           <h1 style="font-family:var(--font-display);font-weight:500;font-size:28px;color:var(--foreground);margin:0 0 6px 0">SharpView</h1>
           <div class="flex items-center gap-2 mb-3">
-            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.5.2</span>
+            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.6.0</span>
             <span class="badge muted" style="background:var(--brand-100);color:var(--brand-700);font-size:11px;min-height:22px;padding:0 8px">最新版本</span>
           </div>
           <p style="font-family:var(--font-serif);font-weight:400;font-size:14px;color:var(--secondary-foreground);font-style:italic;margin:0;text-align:center">将照片转化为 3D 高斯泼溅场景</p>
@@ -476,9 +476,14 @@
           <i data-lucide="arrow-left" class="w-5 h-5"></i>
         </button>
         <span id="viewer-title" style="font-family:var(--font-mono);font-weight:500;font-size:13px;color:#fff">--</span>
-        <button id="viewer-settings-btn" class="inline-flex items-center justify-center w-8 h-8 rounded-lg" style="color:#fff;background:none;border:none;cursor:pointer">
-          <i data-lucide="sliders-horizontal" class="w-5 h-5"></i>
-        </button>
+        <div class="flex items-center gap-1">
+          <button id="viewer-settings-btn" class="inline-flex items-center justify-center w-8 h-8 rounded-lg" style="color:#fff;background:none;border:none;cursor:pointer">
+            <i data-lucide="sliders-horizontal" class="w-5 h-5"></i>
+          </button>
+          <button id="viewer-delete" class="inline-flex items-center justify-center w-8 h-8 rounded-lg" style="color:rgba(255,120,120,0.8);background:none;border:none;cursor:pointer">
+            <i data-lucide="trash-2" class="w-5 h-5"></i>
+          </button>
+        </div>
       </header>
       <!-- Canvas 容器 -->
       <div id="viewer-canvas-container" class="flex-1" style="position:relative;overflow:hidden">
@@ -501,9 +506,9 @@
           <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
           <span class="text-xs">重置视角</span>
         </button>
-        <button id="viewer-delete" class="btn secondary flex items-center gap-2" style="background:rgba(255,255,255,0.15);color:#fff;border-color:rgba(255,255,255,0.2);min-height:40px;border-radius:12px">
-          <i data-lucide="trash-2" class="w-4 h-4"></i>
-          <span class="text-xs">删除</span>
+        <button id="viewer-gyro" class="btn secondary flex items-center gap-2" style="background:rgba(255,255,255,0.15);color:#fff;border-color:rgba(255,255,255,0.2);min-height:40px;border-radius:12px">
+          <i data-lucide="smartphone" class="w-4 h-4"></i>
+          <span class="text-xs" id="viewer-gyro-label">陀螺仪</span>
         </button>
       </div>
     </div>

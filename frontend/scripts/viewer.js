@@ -21,6 +21,7 @@ const LOAD_TIMEOUT_MS = 30000;
 const Viewer = {
   scene: null,
   camera: null,
+  cameraPivot: null, // Parent group for gyroscope parallax
   renderer: null,
   spark: null,
   controls: null,
@@ -34,6 +35,17 @@ const Viewer = {
   animationId: null,
   resizeObserver: null,
   fpsCounter: { frames: 0, lastTime: 0 },
+  gyro: {
+    enabled: false,
+    raw: { beta: 0, gamma: 0 },
+    smooth: { beta: 0, gamma: 0 },
+    target: { beta: 0, gamma: 0 },
+    maxInput: 30,     // Clamp input to ±30°
+    maxTilt: 0.08,    // Max output tilt ~4.6° in radians
+    deadzone: 1.5,    // Ignore tiny movements
+    lerpFactor: 0.08, // Smoothing
+    handler: null,
+  },
   settings: {
     bgColor: '#2b2928',
     fov: 75,
@@ -97,6 +109,13 @@ const Viewer = {
       this.camera.position.set(0, 0, 0);
       this.camera.up.set(0, 1, 0);
       this.camera.lookAt(0, 0, -1);
+
+      // Pivot group for gyroscope parallax: camera is child of pivot.
+      // OrbitControls controls the camera, gyroscope tilts the pivot.
+      // Both compose without conflict.
+      this.cameraPivot = new THREE.Group();
+      this.cameraPivot.add(this.camera);
+      this.scene.add(this.cameraPivot);
 
       // Renderer
       this.renderer = new THREE.WebGLRenderer({
@@ -504,9 +523,38 @@ const Viewer = {
     this.fpsCounter.lastTime = performance.now();
     this.fpsCounter.frames = 0;
 
+    // Pre-allocated objects for gyroscope (avoid GC pressure)
+    const gyroEuler = new THREE.Euler();
+    const gyroQuat = new THREE.Quaternion();
+
     const animate = () => {
       this.animationId = requestAnimationFrame(animate);
+
+      // Update OrbitControls first (controls camera position/rotation)
       if (this.controls) this.controls.update();
+
+      // Apply gyroscope parallax to pivot (after controls.update)
+      if (this.gyro.enabled && this.cameraPivot) {
+        const g = this.gyro;
+        // Map raw angles to target tilt
+        let gamma = THREE.MathUtils.clamp(g.raw.gamma, -g.maxInput, g.maxInput);
+        let beta = THREE.MathUtils.clamp(g.raw.beta, -g.maxInput, g.maxInput);
+        if (Math.abs(gamma) < g.deadzone) gamma = 0;
+        if (Math.abs(beta) < g.deadzone) beta = 0;
+
+        g.target.gamma = (gamma / g.maxInput) * g.maxTilt;
+        g.target.beta = (beta / g.maxInput) * g.maxTilt;
+
+        // Smooth with lerp
+        g.smooth.gamma += (g.target.gamma - g.smooth.gamma) * g.lerpFactor;
+        g.smooth.beta += (g.target.beta - g.smooth.beta) * g.lerpFactor;
+
+        // Apply to pivot: gamma → Z axis (left/right parallax), beta → X axis (up/down)
+        gyroEuler.set(g.smooth.beta, 0, g.smooth.gamma, 'YXZ');
+        gyroQuat.setFromEuler(gyroEuler);
+        this.cameraPivot.quaternion.copy(gyroQuat);
+      }
+
       if (this.renderer && this.scene && this.camera) {
         this.renderer.render(this.scene, this.camera);
       }
@@ -546,10 +594,46 @@ const Viewer = {
   },
 
   /**
+   * Toggle gyroscope parallax on/off.
+   * Uses DeviceOrientationEvent (standard Web API, no plugin needed on Android).
+   */
+  toggleGyro() {
+    if (this.gyro.enabled) {
+      // Disable
+      this.gyro.enabled = false;
+      if (this.gyro.handler) {
+        window.removeEventListener('deviceorientation', this.gyro.handler);
+        this.gyro.handler = null;
+      }
+      // Reset pivot to neutral
+      if (this.cameraPivot) {
+        this.cameraPivot.quaternion.set(0, 0, 0, 1);
+      }
+      this.gyro.smooth = { beta: 0, gamma: 0 };
+      console.log('[Viewer] Gyroscope disabled');
+      return false;
+    } else {
+      // Enable
+      this.gyro.handler = (e) => {
+        if (e.beta !== null) this.gyro.raw.beta = e.beta;
+        if (e.gamma !== null) this.gyro.raw.gamma = e.gamma;
+      };
+      window.addEventListener('deviceorientation', this.gyro.handler);
+      this.gyro.enabled = true;
+      console.log('[Viewer] Gyroscope enabled');
+      return true;
+    }
+  },
+
+  /**
    * Clean up current model but keep renderer alive for reuse.
    * Called when switching models or leaving viewer page.
    */
   dispose() {
+    // Disable gyroscope if active
+    if (this.gyro.enabled) {
+      this.toggleGyro();
+    }
     // Only stop render loop and remove splat, keep renderer/scene alive
     if (this.splat) {
       try { this.splat.dispose(); } catch (e) {}
