@@ -15,7 +15,6 @@
 import * as THREE from "three";
 import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { Motion } from "@capacitor/motion";
 
 const LOAD_TIMEOUT_MS = 30000;
 
@@ -599,10 +598,8 @@ const Viewer = {
 
   /**
    * Toggle gyroscope parallax on/off.
-   * Tries multiple sensor APIs for maximum Android compatibility:
-   * 1. @capacitor/motion plugin
-   * 2. DeviceOrientationEvent (beta/gamma absolute angles)
-   * 3. DeviceMotionEvent (rotationRate as fallback)
+   * Uses standard Web APIs: DeviceOrientationEvent + DeviceMotionEvent.
+   * Android WebView supports these natively (no plugin needed).
    */
   async toggleGyro() {
     if (this.gyro.enabled) {
@@ -612,39 +609,11 @@ const Viewer = {
 
     // Reset raw values
     this.gyro.raw = { beta: 0, gamma: 0 };
-
-    // Strategy 1: @capacitor/motion plugin
-    try {
-      this.gyro.handler = await Motion.addListener('orientation', (event) => {
-        if (event.beta != null) this.gyro.raw.beta = event.beta;
-        if (event.gamma != null) this.gyro.raw.gamma = event.gamma;
-      });
-      this.gyro.enabled = true;
-      console.log('[Viewer] Gyroscope enabled via @capacitor/motion');
-
-      // Check if data is actually flowing after 2 seconds
-      setTimeout(() => {
-        if (this.gyro.enabled && this.gyro.raw.beta === 0 && this.gyro.raw.gamma === 0) {
-          console.log('[Viewer] @capacitor/motion no data after 2s, trying fallback...');
-          this._disableGyro();
-          this._enableWebFallback();
-        }
-      }, 2000);
-      return true;
-    } catch (motionErr) {
-      console.log('[Viewer] @capacitor/motion failed:', motionErr.message);
-    }
-
-    // Strategy 2 & 3: Web API fallback
     return this._enableWebFallback();
   },
 
   _disableGyro() {
     this.gyro.enabled = false;
-    if (this.gyro.handler) {
-      try { this.gyro.handler.remove(); } catch (e) {}
-      this.gyro.handler = null;
-    }
     if (this.gyro.webHandler) {
       window.removeEventListener('deviceorientation', this.gyro.webHandler);
       this.gyro.webHandler = null;
@@ -663,7 +632,7 @@ const Viewer = {
   _enableWebFallback() {
     let gotData = false;
 
-    // Try DeviceOrientationEvent
+    // DeviceOrientationEvent: gives absolute beta/gamma angles
     this.gyro.webHandler = (e) => {
       if (e.beta !== null && e.beta !== undefined) {
         this.gyro.raw.beta = e.beta;
@@ -676,12 +645,11 @@ const Viewer = {
     };
     window.addEventListener('deviceorientation', this.gyro.webHandler);
 
-    // Also try DeviceMotionEvent (some Android devices only fire this)
+    // DeviceMotionEvent: gives rotationRate (some Android devices only fire this)
     this.gyro.motionHandler = (e) => {
       if (e.rotationRate) {
         if (e.rotationRate.beta) {
-          // Integrate rotation rate into accumulated angle (approximate)
-          this.gyro.raw.beta += e.rotationRate.beta * 0.016; // ~60fps
+          this.gyro.raw.beta += e.rotationRate.beta * 0.016;
           this.gyro.raw.beta = THREE.MathUtils.clamp(this.gyro.raw.beta, -45, 45);
           gotData = true;
         }
@@ -695,12 +663,11 @@ const Viewer = {
     window.addEventListener('devicemotion', this.gyro.motionHandler);
 
     this.gyro.enabled = true;
-    console.log('[Viewer] Gyroscope enabled via Web API fallback (deviceorientation + devicemotion)');
+    console.log('[Viewer] Gyroscope enabled (deviceorientation + devicemotion)');
 
-    // Check if any data flows after 2 seconds
     setTimeout(() => {
       if (this.gyro.enabled && !gotData) {
-        console.log('[Viewer] WARNING: No sensor data received after 2s');
+        console.log('[Viewer] WARNING: No sensor data after 2s - sensors may be disabled');
       }
     }, 2000);
 
