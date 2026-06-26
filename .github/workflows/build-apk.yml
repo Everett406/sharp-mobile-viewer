@@ -45,25 +45,10 @@ jobs:
           VERSION_CODE=$((MAJOR * 100 + MINOR * 10 + PATCH))
           echo "Version: $VERSION_NAME (code: $VERSION_CODE)"
 
-          # 1. Copy Gyroscope plugin
+          # 1. Copy Gyroscope plugin and MainActivity
           mkdir -p android/app/src/main/java/com/sharpmobile/app
           cp android-plugins/GyroscopePlugin.java android/app/src/main/java/com/sharpmobile/app/
-
-          # 2. Replace MainActivity to register plugin
-          cat > android/app/src/main/java/com/sharpmobile/app/MainActivity.java << 'JAVA'
-          package com.sharpmobile.app;
-
-          import android.os.Bundle;
-          import com.getcapacitor.BridgeActivity;
-
-          public class MainActivity extends BridgeActivity {
-              @Override
-              public void onCreate(Bundle savedInstanceState) {
-                  registerPlugin(GyroscopePlugin.class);
-                  super.onCreate(savedInstanceState);
-              }
-          }
-          JAVA
+          cp android-plugins/MainActivity.java android/app/src/main/java/com/sharpmobile/app/
 
           # 3. Set version code/name in build.gradle
           sed -i "s/versionCode 1/versionCode $VERSION_CODE/" android/app/build.gradle

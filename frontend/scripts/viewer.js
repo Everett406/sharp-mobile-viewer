@@ -622,15 +622,23 @@ const Viewer = {
 
     // Strategy 1: Native Capacitor plugin (most reliable on Android)
     const Gyroscope = getGyroPlugin();
+    console.log("[Viewer] Gyroscope plugin object:", Gyroscope ? "found" : "NOT found");
+    console.log("[Viewer] window.Capacitor:", typeof window.Capacitor);
+    if (window.Capacitor) {
+      console.log("[Viewer] Capacitor.Plugins keys:", Object.keys(window.Capacitor.Plugins || {}));
+    }
     if (Gyroscope) {
       try {
         const result = await Gyroscope.start();
+        console.log("[Viewer] Native start result:", JSON.stringify(result));
         if (result && result.started) {
-          // Set up event listener using Capacitor's addListener
-          Gyroscope.addListener("orientation", (data) => {
+          // In Capacitor 6, addListener returns a Promise<PluginListenerHandle>
+          const handle = await Gyroscope.addListener("orientation", (data) => {
+            console.log("[Viewer] Gyro data:", data.beta?.toFixed(1), data.gamma?.toFixed(1));
             if (data.beta != null) this.gyro.raw.beta = data.beta;
             if (data.gamma != null) this.gyro.raw.gamma = data.gamma;
           });
+          this.gyro.nativeHandle = handle;
           this.gyro.enabled = true;
           this.gyro.method = result.method || "native";
           console.log("[Viewer] Gyroscope enabled via native plugin:", result.method);
@@ -654,6 +662,10 @@ const Viewer = {
     const Gyroscope = getGyroPlugin();
     if (Gyroscope) {
       try { Gyroscope.stop(); } catch (e) {}
+    }
+    if (this.gyro.nativeHandle) {
+      try { this.gyro.nativeHandle.remove(); } catch (e) {}
+      this.gyro.nativeHandle = null;
     }
     if (this.gyro.webHandler) {
       window.removeEventListener("deviceorientation", this.gyro.webHandler);
