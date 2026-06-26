@@ -66,11 +66,10 @@ const Viewer = {
     targetPitch: 0,
     // Settings
     maxAngle: THREE.MathUtils.degToRad(5),  // Max look angle (default 5°, adjustable via settings)
-    lerpFactor: 0.12,  // Smoothing speed
-    deadzone: 0.02,    // Radians (~1.1°)
-    invertYaw: false,  // Invert left/right
-    invertPitch: false, // Invert up/down
-    swapAxes: true,    // Swap yaw/pitch mapping (fixes wrong axis on Android)
+    sensitivity: 1.0,    // Multiplier for gyro response (0.1 - 3.0)
+    lerpFactor: 0.15,    // Smoothing speed
+    deadzone: 0.02,      // Radians (~1.1°)
+    invert: false,       // Invert both axes
     // Base camera position (without gyro offset) — stored each frame
     // so OrbitControls operates on the "clean" position, not the gyro-perturbed one
     baseCameraPos: new THREE.Vector3(),
@@ -598,41 +597,47 @@ const Viewer = {
         let yaw = gyroEuler.y;
         let pitch = gyroEuler.x;
 
-        // Swap axes if needed (Android device orientation may map differently)
-        if (g.swapAxes) {
-          const tmp = yaw;
-          yaw = -pitch;  // Phone tilt left/right → camera yaw
-          pitch = tmp;   // Phone tilt up/down → camera pitch
-        }
+        // Apply sensitivity multiplier
+        yaw *= g.sensitivity;
+        pitch *= g.sensitivity;
 
-        // Apply inversion
-        if (g.invertYaw) yaw = -yaw;
-        if (g.invertPitch) pitch = -pitch;
+        // Apply inversion (both axes)
+        if (g.invert) { yaw = -yaw; pitch = -pitch; }
 
         // Edge tracking: when delta exceeds maxAngle, shift reference so
-        // the origin follows the user. This allows continuous looking around
-        // while maintaining a limited field of view at any moment.
-        if (yaw > g.maxAngle) {
-          shiftEuler.set(0, yaw - g.maxAngle, 0, 'YXZ');
+        // the origin follows the user. Use a threshold slightly larger than
+        // maxAngle to create a smooth zone and avoid jitter at the boundary.
+        const edgeThreshold = g.maxAngle * 1.3;
+        if (yaw > edgeThreshold) {
+          const excess = yaw - g.maxAngle;
+          shiftEuler.set(0, excess, 0, 'YXZ');
           shiftQuat.setFromEuler(shiftEuler);
           g.refQuat.multiply(shiftQuat);
           yaw = g.maxAngle;
-        } else if (yaw < -g.maxAngle) {
-          shiftEuler.set(0, yaw + g.maxAngle, 0, 'YXZ');
+        } else if (yaw < -edgeThreshold) {
+          const excess = yaw + g.maxAngle;
+          shiftEuler.set(0, excess, 0, 'YXZ');
           shiftQuat.setFromEuler(shiftEuler);
           g.refQuat.multiply(shiftQuat);
           yaw = -g.maxAngle;
+        } else {
+          // Within edge zone: clamp without shifting reference
+          yaw = THREE.MathUtils.clamp(yaw, -g.maxAngle, g.maxAngle);
         }
-        if (pitch > g.maxAngle) {
-          shiftEuler.set(pitch - g.maxAngle, 0, 0, 'YXZ');
+        if (pitch > edgeThreshold) {
+          const excess = pitch - g.maxAngle;
+          shiftEuler.set(excess, 0, 0, 'YXZ');
           shiftQuat.setFromEuler(shiftEuler);
           g.refQuat.multiply(shiftQuat);
           pitch = g.maxAngle;
-        } else if (pitch < -g.maxAngle) {
-          shiftEuler.set(pitch + g.maxAngle, 0, 0, 'YXZ');
+        } else if (pitch < -edgeThreshold) {
+          const excess = pitch + g.maxAngle;
+          shiftEuler.set(excess, 0, 0, 'YXZ');
           shiftQuat.setFromEuler(shiftEuler);
           g.refQuat.multiply(shiftQuat);
           pitch = -g.maxAngle;
+        } else {
+          pitch = THREE.MathUtils.clamp(pitch, -g.maxAngle, g.maxAngle);
         }
 
         // Deadzone
@@ -642,7 +647,7 @@ const Viewer = {
         g.targetYaw = yaw;
         g.targetPitch = pitch;
 
-        // Smooth toward target
+        // Smooth toward target (faster lerp = less lag, but may need tuning)
         g.smoothYaw += (g.targetYaw - g.smoothYaw) * g.lerpFactor;
         g.smoothPitch += (g.targetPitch - g.smoothPitch) * g.lerpFactor;
 
@@ -867,11 +872,11 @@ const Viewer = {
     if (settings.maxAngleDeg != null) {
       this.gyro.maxAngle = THREE.MathUtils.degToRad(settings.maxAngleDeg);
     }
-    if (settings.invertYaw != null) {
-      this.gyro.invertYaw = settings.invertYaw;
+    if (settings.sensitivity != null) {
+      this.gyro.sensitivity = settings.sensitivity;
     }
-    if (settings.invertPitch != null) {
-      this.gyro.invertPitch = settings.invertPitch;
+    if (settings.invert != null) {
+      this.gyro.invert = settings.invert;
     }
   },
 

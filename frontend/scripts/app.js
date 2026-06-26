@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.10.1';
+const APP_VERSION = '0.10.2';
 
 const App = {
   currentPage: 'welcome',
@@ -948,20 +948,19 @@ function setupEventListeners() {
       window.SharpViewViewer.updateGyroSettings({ maxAngleDeg: deg });
     }
   });
-  document.getElementById('gyro-invert-yaw')?.addEventListener('click', () => {
-    const toggle = document.getElementById('gyro-invert-yaw');
-    toggle.classList.toggle('on');
-    const on = toggle.classList.contains('on');
+  document.getElementById('gyro-sensitivity')?.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    document.getElementById('gyro-sensitivity-value').textContent = val.toFixed(1);
     if (window.SharpViewViewer) {
-      window.SharpViewViewer.updateGyroSettings({ invertYaw: on });
+      window.SharpViewViewer.updateGyroSettings({ sensitivity: val });
     }
   });
-  document.getElementById('gyro-invert-pitch')?.addEventListener('click', () => {
-    const toggle = document.getElementById('gyro-invert-pitch');
+  document.getElementById('gyro-invert')?.addEventListener('click', () => {
+    const toggle = document.getElementById('gyro-invert');
     toggle.classList.toggle('on');
     const on = toggle.classList.contains('on');
     if (window.SharpViewViewer) {
-      window.SharpViewViewer.updateGyroSettings({ invertPitch: on });
+      window.SharpViewViewer.updateGyroSettings({ invert: on });
     }
   });
 
