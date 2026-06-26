@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.4.1';
+const APP_VERSION = '0.4.2';
 
 const App = {
   currentPage: 'welcome',
@@ -832,14 +832,31 @@ async function handleLoadPly() {
 
     // Navigate to viewer page
     document.getElementById('viewer-title').textContent = file.name;
-    document.getElementById('viewer-placeholder').style.display = 'none';
+    const placeholder = document.getElementById('viewer-placeholder');
+    placeholder.innerHTML = `
+      <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center stepper-pulse" style="background:rgba(255,255,255,0.1)">
+        <i data-lucide="loader" class="w-8 h-8" style="color:rgba(255,255,255,0.6)"></i>
+      </div>
+      <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.7);margin:0 0 6px 0">初始化渲染器</p>
+      <p style="font:400 12px var(--font-mono);color:rgba(255,255,255,0.4);margin:0">正在加载 Three.js + Spark...</p>
+      <div style="margin-top:12px;width:120px;height:3px;border-radius:2px;background:rgba(255,255,255,0.1);overflow:hidden">
+        <div style="width:33%;height:100%;background:var(--brand-500);transition:width 0.3s"></div>
+      </div>`;
+    placeholder.style.display = 'flex';
+    if (window.lucide) lucide.createIcons();
     Router.navigate('viewer');
 
-    // Load viewer module (Spark + Three.js from CDN) if not yet loaded
+    // Load viewer module (Spark + Three.js, bundled locally) if not yet loaded
     try {
       await ensureViewerModule();
     } catch (e) {
-      showToast('3D 渲染器加载失败，请检查网络');
+      placeholder.innerHTML = `
+        <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center" style="background:rgba(255,255,255,0.1)">
+          <i data-lucide="alert-triangle" class="w-8 h-8" style="color:rgba(255,255,255,0.4)"></i>
+        </div>
+        <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.5);margin:0 0 4px 0">3D 渲染器加载失败</p>
+        <p style="font:400 12px var(--font-sans);color:rgba(255,255,255,0.3);margin:0">${e.message || '未知错误'}</p>`;
+      if (window.lucide) lucide.createIcons();
       return;
     }
 
@@ -864,27 +881,39 @@ async function viewJob3D(jobId) {
   App.currentViewJobId = jobId;
   document.getElementById('viewer-title').textContent = `${jobId}.ply`;
 
-  // Show loading state
+  // Show loading state with step indicator
   const placeholder = document.getElementById('viewer-placeholder');
-  placeholder.innerHTML = `
-    <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center stepper-pulse" style="background:rgba(255,255,255,0.1)">
-      <i data-lucide="loader" class="w-8 h-8" style="color:rgba(255,255,255,0.6)"></i>
-    </div>
-    <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.5);margin:0">加载中...</p>`;
+  const renderLoadingStep = (step, detail) => {
+    const steps = ['初始化渲染器', '加载 3D 模型', '就绪'];
+    placeholder.innerHTML = `
+      <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center stepper-pulse" style="background:rgba(255,255,255,0.1)">
+        <i data-lucide="loader" class="w-8 h-8" style="color:rgba(255,255,255,0.6)"></i>
+      </div>
+      <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.7);margin:0 0 6px 0">${steps[step] || '加载中...'}</p>
+      ${detail ? `<p style="font:400 12px var(--font-mono);color:rgba(255,255,255,0.4);margin:0">${detail}</p>` : ''}
+      <div style="margin-top:12px;width:120px;height:3px;border-radius:2px;background:rgba(255,255,255,0.1);overflow:hidden">
+        <div style="width:${Math.round(((step+1)/3)*100)}%;height:100%;background:var(--brand-500);transition:width 0.3s"></div>
+      </div>`;
+    if (window.lucide) lucide.createIcons();
+  };
+  renderLoadingStep(0, '正在加载 Three.js + Spark...');
   placeholder.style.display = 'flex';
   if (window.lucide) lucide.createIcons();
 
   Router.navigate('viewer');
 
-  // Load viewer module (Spark + Three.js from CDN) in parallel with PLY data
-  const modulePromise = ensureViewerModule().catch(e => {
+  // Load viewer module (Spark + Three.js, bundled locally) in parallel with PLY data
+  const modulePromise = ensureViewerModule().then(() => {
+    renderLoadingStep(1, '准备加载 PLY 数据...');
+    return true;
+  }).catch(e => {
     console.error('Viewer module load failed:', e);
     placeholder.innerHTML = `
       <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center" style="background:rgba(255,255,255,0.1)">
         <i data-lucide="alert-triangle" class="w-8 h-8" style="color:rgba(255,255,255,0.4)"></i>
       </div>
       <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.5);margin:0 0 4px 0">3D 渲染器加载失败</p>
-      <p style="font:400 12px var(--font-sans);color:rgba(255,255,255,0.3);margin:0">请检查网络连接后重试</p>`;
+      <p style="font:400 12px var(--font-sans);color:rgba(255,255,255,0.3);margin:0">${e.message || '未知错误'}</p>`;
     if (window.lucide) lucide.createIcons();
     return false;
   });
@@ -937,16 +966,10 @@ async function viewJob3D(jobId) {
       return;
     }
 
-    showToast('正在重新下载 PLY...');
+    renderLoadingStep(1, `下载 PLY: 0%`);
     const plyBlob = await GitHubAPI.downloadAssetWithProgress(config, assets.plyAsset.id, (loaded) => {
       const pct = assets.plyAsset.size > 0 ? Math.round((loaded / assets.plyAsset.size) * 100) : 0;
-      placeholder.innerHTML = `
-        <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center stepper-pulse" style="background:rgba(255,255,255,0.1)">
-          <i data-lucide="download" class="w-8 h-8" style="color:rgba(255,255,255,0.6)"></i>
-        </div>
-        <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.5);margin:0 0 4px 0">下载中...</p>
-        <p style="font:400 12px var(--font-mono);color:rgba(255,255,255,0.3);margin:0">${formatBytes(loaded)} / ${formatBytes(assets.plyAsset.size)} (${pct}%)</p>`;
-      if (window.lucide) lucide.createIcons();
+      renderLoadingStep(1, `下载 PLY: ${formatBytes(loaded)} / ${formatBytes(assets.plyAsset.size)} (${pct}%)`);
     });
 
     App.currentPlyBlob = plyBlob;
@@ -1390,22 +1413,30 @@ function showConfirm(title, message) {
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Dynamically load the viewer.js ES module (Spark + Three.js from CDN).
- * Only loaded when the user actually opens the 3D viewer, so it doesn't
- * block app initialization or the welcome page buttons.
+ * Dynamically load the viewer.js ES module (Spark + Three.js, bundled locally).
+ * Only loaded when the user actually opens the 3D viewer.
+ * Shows loading progress and has a 15-second timeout.
  */
 async function ensureViewerModule() {
   if (App.viewerModuleLoaded) return;
   if (App.viewerModuleLoading) return App.viewerModuleLoading;
 
   App.viewerModuleLoading = (async () => {
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('加载超时')), 15000)
+    );
+
     try {
-      // Dynamic import uses the importmap defined in index.html
-      const module = await import('./viewer.js');
+      // Race between dynamic import and timeout
+      const module = await Promise.race([
+        import('./viewer.js'),
+        timeout,
+      ]);
       window.SharpViewViewer = module.default || module.SharpViewViewer || window.SharpViewViewer;
       App.viewerModuleLoaded = true;
-      console.log('Viewer module loaded dynamically');
+      console.log('Viewer module loaded successfully');
     } catch (e) {
+      App.viewerModuleLoading = null; // Allow retry
       console.error('Failed to load viewer module:', e);
       throw e;
     }
