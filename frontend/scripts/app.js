@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.10.0';
+const APP_VERSION = '0.10.1';
 
 const App = {
   currentPage: 'welcome',
@@ -938,6 +938,31 @@ function setupEventListeners() {
     toggle.classList.toggle('on');
     App.viewerSettings.pointCloudMode = toggle.classList.contains('on');
     dispatchViewerSettings();
+  });
+
+  // ── Gyroscope settings ──
+  document.getElementById('gyro-angle')?.addEventListener('input', (e) => {
+    const deg = parseInt(e.target.value);
+    document.getElementById('gyro-angle-value').textContent = `${deg}°`;
+    if (window.SharpViewViewer) {
+      window.SharpViewViewer.updateGyroSettings({ maxAngleDeg: deg });
+    }
+  });
+  document.getElementById('gyro-invert-yaw')?.addEventListener('click', () => {
+    const toggle = document.getElementById('gyro-invert-yaw');
+    toggle.classList.toggle('on');
+    const on = toggle.classList.contains('on');
+    if (window.SharpViewViewer) {
+      window.SharpViewViewer.updateGyroSettings({ invertYaw: on });
+    }
+  });
+  document.getElementById('gyro-invert-pitch')?.addEventListener('click', () => {
+    const toggle = document.getElementById('gyro-invert-pitch');
+    toggle.classList.toggle('on');
+    const on = toggle.classList.contains('on');
+    if (window.SharpViewViewer) {
+      window.SharpViewViewer.updateGyroSettings({ invertPitch: on });
+    }
   });
 
   // ── Error page ──

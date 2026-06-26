@@ -338,7 +338,7 @@
           </div>
           <h1 style="font-family:var(--font-display);font-weight:500;font-size:28px;color:var(--foreground);margin:0 0 6px 0">SharpView</h1>
           <div class="flex items-center gap-2 mb-3">
-            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.10.0</span>
+            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.10.1</span>
             <span class="badge muted" style="background:var(--brand-100);color:var(--brand-700);font-size:11px;min-height:22px;padding:0 8px">最新版本</span>
           </div>
           <p style="font-family:var(--font-serif);font-weight:400;font-size:14px;color:var(--secondary-foreground);font-style:italic;margin:0;text-align:center">将照片转化为 3D 高斯泼溅场景</p>
@@ -658,12 +658,39 @@
           </div>
         </div>
         <!-- 最大屏幕空间 Splat 尺寸 -->
-        <div class="mb-2">
+        <div class="mb-4">
           <div class="setting-row mb-2">
             <span style="font:500 13px var(--font-sans);color:var(--foreground)">最大 Splat 尺寸</span>
             <span id="viewer-maxsize-value" style="font:600 13px var(--font-mono);color:var(--foreground)">512</span>
           </div>
           <input type="range" id="viewer-maxsize" min="64" max="2048" step="64" value="512" class="w-full" style="accent-color:var(--brand-500)">
+        </div>
+
+        <!-- ═══ 陀螺仪设置 ═══ -->
+        <div style="border-top:1px solid var(--border);margin:12px 0;padding-top:12px">
+          <p style="font:600 13px var(--font-sans);color:var(--foreground);margin:0 0 10px 0">陀螺仪</p>
+          <!-- 最大角度 -->
+          <div class="mb-3">
+            <div class="setting-row mb-2">
+              <span style="font:400 12px var(--font-sans);color:var(--secondary-foreground)">最大角度</span>
+              <span id="gyro-angle-value" style="font:600 12px var(--font-mono);color:var(--foreground)">5°</span>
+            </div>
+            <input type="range" id="gyro-angle" min="1" max="45" step="1" value="5" class="w-full" style="accent-color:var(--brand-500)">
+          </div>
+          <!-- 反转左右 -->
+          <div class="setting-row mb-3">
+            <span style="font:400 12px var(--font-sans);color:var(--secondary-foreground)">反转左右</span>
+            <div id="gyro-invert-yaw" class="toggle" role="switch" aria-checked="false">
+              <div class="knob"></div>
+            </div>
+          </div>
+          <!-- 反转上下 -->
+          <div class="setting-row">
+            <span style="font:400 12px var(--font-sans);color:var(--secondary-foreground)">反转上下</span>
+            <div id="gyro-invert-pitch" class="toggle" role="switch" aria-checked="false">
+              <div class="knob"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -703,8 +730,8 @@
 
   </div>
 
-  <script src="scripts/github.js?v=100" defer></script>
-  <script src="scripts/viewer-bundle.js?v=100" defer></script>
-  <script src="scripts/app.js?v=100" defer></script>
+  <script src="scripts/github.js?v=101" defer></script>
+  <script src="scripts/viewer-bundle.js?v=101" defer></script>
+  <script src="scripts/app.js?v=101" defer></script>
 </body>
 </html>

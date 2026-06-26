@@ -65,9 +65,12 @@ const Viewer = {
     targetYaw: 0,
     targetPitch: 0,
     // Settings
-    maxAngle: 0.5,     // Max look angle ~28° in each direction
+    maxAngle: THREE.MathUtils.degToRad(5),  // Max look angle (default 5°, adjustable via settings)
     lerpFactor: 0.12,  // Smoothing speed
     deadzone: 0.02,    // Radians (~1.1°)
+    invertYaw: false,  // Invert left/right
+    invertPitch: false, // Invert up/down
+    swapAxes: true,    // Swap yaw/pitch mapping (fixes wrong axis on Android)
     // Base camera position (without gyro offset) — stored each frame
     // so OrbitControls operates on the "clean" position, not the gyro-perturbed one
     baseCameraPos: new THREE.Vector3(),
@@ -595,6 +598,17 @@ const Viewer = {
         let yaw = gyroEuler.y;
         let pitch = gyroEuler.x;
 
+        // Swap axes if needed (Android device orientation may map differently)
+        if (g.swapAxes) {
+          const tmp = yaw;
+          yaw = -pitch;  // Phone tilt left/right → camera yaw
+          pitch = tmp;   // Phone tilt up/down → camera pitch
+        }
+
+        // Apply inversion
+        if (g.invertYaw) yaw = -yaw;
+        if (g.invertPitch) pitch = -pitch;
+
         // Edge tracking: when delta exceeds maxAngle, shift reference so
         // the origin follows the user. This allows continuous looking around
         // while maintaining a limited field of view at any moment.
@@ -847,6 +861,21 @@ const Viewer = {
   },
 
   /**
+   * Update gyroscope settings from UI.
+   */
+  updateGyroSettings(settings) {
+    if (settings.maxAngleDeg != null) {
+      this.gyro.maxAngle = THREE.MathUtils.degToRad(settings.maxAngleDeg);
+    }
+    if (settings.invertYaw != null) {
+      this.gyro.invertYaw = settings.invertYaw;
+    }
+    if (settings.invertPitch != null) {
+      this.gyro.invertPitch = settings.invertPitch;
+    }
+  },
+
+  /**
    * Toggle between orbit mode and free-move mode.
    * Orbit: rotate around a target point, zoom toward target (gets slower close up)
    * Free: pan/move freely, zoom translates camera forward/back at constant rate
@@ -856,16 +885,17 @@ const Viewer = {
       // Switch to free mode: camera translates forward/back instead of dolly
       this.cameraMode = 'free';
       if (this.controls) {
-        this.controls.enableRotate = false;
-        this.controls.enableZoom = false;  // We handle zoom manually
-        this.controls.enablePan = true;    // One-finger pan still works
-        // Disable two-finger for OrbitControls (we handle it)
+        this.controls.enableRotate = true;   // Keep rotation in free mode too!
+        this.controls.enableZoom = false;    // We handle zoom manually (translate)
+        this.controls.enablePan = true;      // Two-finger pan still works
         if (this.controls.touches) {
-          this.controls.touches.TWO = -1;
+          // One finger = rotate, two finger = our custom translate + pan
+          this.controls.touches.ONE = THREE.TOUCH.ROTATE;
+          this.controls.touches.TWO = -1;    // We handle two-finger ourselves
         }
       }
       this._setupFreeModeZoom();
-      console.log('[Viewer] Camera mode: free (camera translate)');
+      console.log('[Viewer] Camera mode: free (camera translate + rotate)');
     } else {
       // Switch back to orbit mode
       this.cameraMode = 'orbit';
