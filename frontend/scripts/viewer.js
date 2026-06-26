@@ -127,8 +127,8 @@ const Viewer = {
       this.controls.enablePan = true;
       this.controls.enableZoom = true;
       this.controls.zoomToCursor = true;
-      this.controls.rotateSpeed = 1.0;
-      this.controls.zoomSpeed = 1.0;
+      this.controls.rotateSpeed = 0.3;
+      this.controls.zoomSpeed = 0.8;
       this.controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
       // Use ResizeObserver instead of window.resize (more reliable in Capacitor)
@@ -360,17 +360,21 @@ const Viewer = {
       const fovRad = THREE.MathUtils.degToRad(this.camera.fov);
       const distance = (radius / Math.sin(fovRad / 2)) * 1.1; // 10% margin
 
-      // Position camera from +Z looking toward -Z (front view = original photo angle)
-      this.camera.position.set(center.x, center.y, center.z + distance);
+      // SHARP camera was at origin (0,0,0) looking straight along +Z.
+      // After 180° X rotation, scene is at -Z. To match the original photo
+      // viewpoint, camera must look straight along -Z (not at an angle).
+      // Keep camera on the Z axis only (x=0, y=0), not at model center's x/y.
+      this.camera.position.set(0, 0, center.z + distance);
       this.camera.up.set(0, 1, 0);
-      this.camera.lookAt(center);
+      this.camera.lookAt(0, 0, center.z);
 
       // Set near/far based on model size (metric scale)
       this.camera.near = Math.max(distance / 1000, 0.001);
       this.camera.far = distance * 100;
       this.camera.updateProjectionMatrix();
 
-      this.controls.target.copy(center);
+      // Target on Z axis only, keeping frontal view
+      this.controls.target.set(0, 0, center.z);
       this.controls.update();
 
       console.log('[Viewer] Auto-framed:', {
