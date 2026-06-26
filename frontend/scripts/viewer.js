@@ -829,10 +829,10 @@ const Viewer = {
   },
 };
 
-// Export to window for app.js access
+// Directly assign to window — esbuild IIFE format with exports creates a
+// namespace wrapper { default: Viewer, SharpViewViewer: Viewer } which breaks
+// property access. Assigning directly ensures window.SharpViewViewer IS the Viewer object.
 window.SharpViewViewer = Viewer;
-export { Viewer as SharpViewViewer };
-export default Viewer;
 
 // ═══════════════════════════════════════════════════════════
 // Event listeners
