@@ -65,11 +65,12 @@ const Viewer = {
     targetYaw: 0,
     targetPitch: 0,
     // Settings
-    maxAngle: 0.35,    // Max look angle ~20° in each direction
+    maxAngle: 0.5,     // Max look angle ~28° in each direction
     lerpFactor: 0.12,  // Smoothing speed
     deadzone: 0.02,    // Radians (~1.1°)
-    // Base look direction (where camera initially points)
-    baseTarget: new THREE.Vector3(0, 0, -1),
+    // Base camera position (without gyro offset) — stored each frame
+    // so OrbitControls operates on the "clean" position, not the gyro-perturbed one
+    baseCameraPos: new THREE.Vector3(),
     // State
     nativeHandle: null,
     webHandler: null,
@@ -557,35 +558,68 @@ const Viewer = {
 
     // Pre-allocated objects for gyroscope (avoid GC pressure)
     const gyroEuler = new THREE.Euler();
-    const tempQuat = new THREE.Quaternion();
+    const shiftEuler = new THREE.Euler();
+    const shiftQuat = new THREE.Quaternion();
     const refInverse = new THREE.Quaternion();
-    const lookDir = new THREE.Vector3();
+    const offsetVec = new THREE.Vector3();
+    const rightVec = new THREE.Vector3();
+    const UP = new THREE.Vector3(0, 1, 0);
 
     const animate = () => {
       this.animationId = requestAnimationFrame(animate);
+
+      // When gyro is on: restore camera to base position BEFORE controls.update()
+      // so OrbitControls operates on the "clean" position, not the gyro-perturbed one
+      if (this.gyro.enabled && this.gyro.refReady) {
+        this.camera.position.copy(this.gyro.baseCameraPos);
+      }
 
       if (this.controls) {
         this.controls.update();
       }
 
-      // Apply gyroscope: modify OrbitControls target so camera looks around
-      // like a panorama viewer (limited range, no gimbal lock via quaternion)
+      // After controls.update(): store new base, then apply gyro as camera
+      // POSITION rotation around target (creates parallax/depth perception)
       if (this.gyro.enabled && this.gyro.refReady && this.controls) {
         const g = this.gyro;
+
+        // Store the clean position from OrbitControls (no gyro offset)
+        g.baseCameraPos.copy(this.camera.position);
 
         // Compute relative quaternion: delta = ref⁻¹ * raw
         refInverse.copy(g.refQuat).invert();
         g.deltaQuat.copy(refInverse).multiply(g.rawQuat);
 
         // Extract yaw (left/right) and pitch (up/down) from delta quaternion
-        // Convert quaternion to Euler YXZ order: yaw=Y, pitch=X
         gyroEuler.setFromQuaternion(g.deltaQuat, 'YXZ');
-        let yaw = gyroEuler.y;   // left-right rotation
-        let pitch = gyroEuler.x; // up-down rotation
+        let yaw = gyroEuler.y;
+        let pitch = gyroEuler.x;
 
-        // Clamp to max look angle (limited panorama range ~20° each way)
-        yaw = THREE.MathUtils.clamp(yaw, -g.maxAngle, g.maxAngle);
-        pitch = THREE.MathUtils.clamp(pitch, -g.maxAngle, g.maxAngle);
+        // Edge tracking: when delta exceeds maxAngle, shift reference so
+        // the origin follows the user. This allows continuous looking around
+        // while maintaining a limited field of view at any moment.
+        if (yaw > g.maxAngle) {
+          shiftEuler.set(0, yaw - g.maxAngle, 0, 'YXZ');
+          shiftQuat.setFromEuler(shiftEuler);
+          g.refQuat.multiply(shiftQuat);
+          yaw = g.maxAngle;
+        } else if (yaw < -g.maxAngle) {
+          shiftEuler.set(0, yaw + g.maxAngle, 0, 'YXZ');
+          shiftQuat.setFromEuler(shiftEuler);
+          g.refQuat.multiply(shiftQuat);
+          yaw = -g.maxAngle;
+        }
+        if (pitch > g.maxAngle) {
+          shiftEuler.set(pitch - g.maxAngle, 0, 0, 'YXZ');
+          shiftQuat.setFromEuler(shiftEuler);
+          g.refQuat.multiply(shiftQuat);
+          pitch = g.maxAngle;
+        } else if (pitch < -g.maxAngle) {
+          shiftEuler.set(pitch + g.maxAngle, 0, 0, 'YXZ');
+          shiftQuat.setFromEuler(shiftEuler);
+          g.refQuat.multiply(shiftQuat);
+          pitch = -g.maxAngle;
+        }
 
         // Deadzone
         if (Math.abs(yaw) < g.deadzone) yaw = 0;
@@ -598,20 +632,17 @@ const Viewer = {
         g.smoothYaw += (g.targetYaw - g.smoothYaw) * g.lerpFactor;
         g.smoothPitch += (g.targetPitch - g.smoothPitch) * g.lerpFactor;
 
-        // Compute new look direction: rotate base target by yaw + pitch
-        // This moves the OrbitControls target on a sphere around the camera,
-        // making it look left/right/up/down like a panorama viewer.
-        lookDir.copy(g.baseTarget);
-        // Apply yaw (around Y axis) then pitch (around X axis)
-        tempQuat.setFromEuler(gyroEuler.set(g.smoothPitch, g.smoothYaw, 0, 'YXZ'));
-        lookDir.applyQuaternion(tempQuat);
-
-        // Set target = camera position + look direction * distance
-        // Use the original camera-to-target distance
-        const dist = this.camera.position.distanceTo(g.baseTarget);
-        this.controls.target.copy(this.camera.position).add(
-          lookDir.normalize().multiplyScalar(Math.max(dist, 0.5))
-        );
+        // Apply: rotate camera POSITION around target → parallax effect!
+        // This moves the camera on a sphere around the orbit center,
+        // so nearby objects shift differently from distant ones.
+        offsetVec.subVectors(this.camera.position, this.controls.target);
+        // Yaw: rotate around world up
+        offsetVec.applyAxisAngle(UP, g.smoothYaw);
+        // Pitch: rotate around camera's right vector
+        rightVec.crossVectors(this.camera.up, offsetVec).normalize();
+        offsetVec.applyAxisAngle(rightVec, g.smoothPitch);
+        this.camera.position.copy(this.controls.target).add(offsetVec);
+        this.camera.lookAt(this.controls.target);
       }
 
       if (this.renderer && this.scene && this.camera) {
@@ -670,10 +701,12 @@ const Viewer = {
     this.gyro.targetYaw = 0;
     this.gyro.targetPitch = 0;
 
-    // Store current controls target as base
+    // Store current camera position as base (for OrbitControls to operate on)
+    if (this.camera) {
+      this.gyro.baseCameraPos.copy(this.camera.position);
+    }
+    // Disable touch rotate while gyro is on (zoom/pan still work)
     if (this.controls) {
-      this.gyro.baseTarget.copy(this.controls.target);
-      // Disable touch rotate while gyro is on (zoom/pan still work)
       this.controls.enableRotate = false;
     }
 
@@ -738,8 +771,6 @@ const Viewer = {
     // Restore controls
     if (this.controls) {
       this.controls.enableRotate = true;
-      // Reset target to base
-      this.controls.target.copy(this.gyro.baseTarget);
     }
     console.log("[Viewer] Gyroscope disabled");
   },
@@ -822,32 +853,101 @@ const Viewer = {
    */
   toggleCameraMode() {
     if (this.cameraMode === 'orbit') {
-      // Switch to free mode
+      // Switch to free mode: camera translates forward/back instead of dolly
       this.cameraMode = 'free';
       if (this.controls) {
-        // In free mode: disable rotate, enable pan, custom zoom
         this.controls.enableRotate = false;
-        this.controls.enablePan = true;
-        // Override zoom to use constant-speed translation instead of dolly
-        this._originalZoomSpeed = this.controls.zoomSpeed;
-        this.controls.zoomSpeed = 1.2;
-        // Set a very small minDistance to allow getting very close
-        this.controls.minDistance = 0.0001;
+        this.controls.enableZoom = false;  // We handle zoom manually
+        this.controls.enablePan = true;    // One-finger pan still works
+        // Disable two-finger for OrbitControls (we handle it)
+        if (this.controls.touches) {
+          this.controls.touches.TWO = -1;
+        }
       }
-      console.log('[Viewer] Camera mode: free');
+      this._setupFreeModeZoom();
+      console.log('[Viewer] Camera mode: free (camera translate)');
     } else {
       // Switch back to orbit mode
       this.cameraMode = 'orbit';
       if (this.controls) {
         this.controls.enableRotate = true;
+        this.controls.enableZoom = true;
         this.controls.enablePan = true;
-        if (this._originalZoomSpeed) {
-          this.controls.zoomSpeed = this._originalZoomSpeed;
+        if (this.controls.touches) {
+          this.controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
         }
       }
+      this._removeFreeModeZoom();
       console.log('[Viewer] Camera mode: orbit');
     }
     return this.cameraMode;
+  },
+
+  /**
+   * Free mode zoom: translate camera + target along look direction.
+   * This gives constant-speed movement (no slowdown near target like dolly).
+   */
+  _setupFreeModeZoom() {
+    let prevPinchDist = 0;
+    const tmpDir = new THREE.Vector3();
+
+    const getPinchDist = (e) => Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+
+    this._freeTouchStart = (e) => {
+      if (e.touches.length === 2) prevPinchDist = getPinchDist(e);
+    };
+
+    this._freeTouchMove = (e) => {
+      if (e.touches.length !== 2) return;
+      e.preventDefault();
+      const dist = getPinchDist(e);
+      if (prevPinchDist > 0) {
+        const delta = dist - prevPinchDist;
+        // Translate camera and target along look direction
+        this.camera.getWorldDirection(tmpDir);
+        const speed = delta * 0.004;
+        this.camera.position.addScaledVector(tmpDir, speed);
+        this.controls.target.addScaledVector(tmpDir, speed);
+      }
+      prevPinchDist = dist;
+    };
+
+    this._freeTouchEnd = () => { prevPinchDist = 0; };
+
+    this._freeWheel = (e) => {
+      e.preventDefault();
+      this.camera.getWorldDirection(tmpDir);
+      const speed = -e.deltaY * 0.002;
+      this.camera.position.addScaledVector(tmpDir, speed);
+      this.controls.target.addScaledVector(tmpDir, speed);
+    };
+
+    this.canvas.addEventListener('touchstart', this._freeTouchStart, { passive: false });
+    this.canvas.addEventListener('touchmove', this._freeTouchMove, { passive: false });
+    this.canvas.addEventListener('touchend', this._freeTouchEnd);
+    this.canvas.addEventListener('wheel', this._freeWheel, { passive: false });
+  },
+
+  _removeFreeModeZoom() {
+    if (this._freeTouchStart) {
+      this.canvas.removeEventListener('touchstart', this._freeTouchStart);
+      this._freeTouchStart = null;
+    }
+    if (this._freeTouchMove) {
+      this.canvas.removeEventListener('touchmove', this._freeTouchMove);
+      this._freeTouchMove = null;
+    }
+    if (this._freeTouchEnd) {
+      this.canvas.removeEventListener('touchend', this._freeTouchEnd);
+      this._freeTouchEnd = null;
+    }
+    if (this._freeWheel) {
+      this.canvas.removeEventListener('wheel', this._freeWheel);
+      this._freeWheel = null;
+    }
   },
 
   /**

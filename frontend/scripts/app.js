@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.9.6';
+const APP_VERSION = '0.10.0';
 
 const App = {
   currentPage: 'welcome',
@@ -812,85 +812,33 @@ function setupEventListeners() {
   // ── Gyroscope toggle ──
   window._gyroToggling = false;
   window.toggleGyro = async function() {
-    // Prevent double-fire (onclick + addEventListener, or rapid clicks)
     if (window._gyroToggling) return;
     window._gyroToggling = true;
 
-    const debugEl = document.getElementById('gyro-debug');
     const btn = document.getElementById('viewer-gyro');
     const label = document.getElementById('viewer-gyro-label');
 
-    const debugLog = (msg) => {
-      console.log('[GyroDebug]', msg);
-      if (debugEl) {
-        debugEl.style.display = 'block';
-        const time = new Date().toLocaleTimeString();
-        debugEl.textContent += `[${time}] ${msg}\n`;
-        debugEl.scrollTop = debugEl.scrollHeight;
-      }
-    };
-
-    if (!debugEl || !btn) {
-      alert('错误: 找不到陀螺仪按钮');
+    if (!btn || !window.SharpViewViewer || typeof window.SharpViewViewer.toggleGyro !== 'function') {
+      showToast('渲染器未就绪');
       window._gyroToggling = false;
       return;
     }
 
-    if (!window.SharpViewViewer) {
-      showToast('渲染器未加载');
-      debugLog('错误: window.SharpViewViewer 不存在');
-      window._gyroToggling = false;
-      return;
-    }
-
-    if (typeof window.SharpViewViewer.toggleGyro !== 'function') {
-      showToast('陀螺仪方法不存在');
-      debugLog('错误: toggleGyro 不是函数');
-      window._gyroToggling = false;
-      return;
-    }
-
-    // Check current state BEFORE calling toggle
     const isCurrentlyOn = window.SharpViewViewer.gyro && window.SharpViewViewer.gyro.enabled;
 
     try {
-      if (!isCurrentlyOn) {
-        showToast('正在开启陀螺仪...');
-      }
+      if (!isCurrentlyOn) showToast('正在开启陀螺仪...');
       const enabled = await window.SharpViewViewer.toggleGyro();
       if (enabled) {
         btn.style.background = 'rgba(201,100,66,0.4)';
         label.textContent = '陀螺仪 ON';
-        debugEl.textContent = '';
-        debugLog(`✅ 已开启 (${window.SharpViewViewer.gyro.method || 'web'})`);
         showToast('陀螺仪已开启');
-
-        let dataCount = 0;
-        const mon = setInterval(() => {
-          if (window.SharpViewViewer.gyro && window.SharpViewViewer.gyro.refReady) {
-            dataCount++;
-          }
-        }, 500);
-        setTimeout(() => {
-          clearInterval(mon);
-          debugLog(dataCount === 0 ? '⚠️ 5秒无数据' : `✅ 收到${dataCount}次数据`);
-        }, 5000);
-
-        window._gyroInt = setInterval(() => {
-          const g = window.SharpViewViewer.gyro;
-          if (g) {
-            debugLog(`yaw=${(g.smoothYaw*180/Math.PI).toFixed(1)}° pitch=${(g.smoothPitch*180/Math.PI).toFixed(1)}° ref=${g.refReady}`);
-          }
-        }, 1000);
       } else {
         btn.style.background = 'rgba(255,255,255,0.15)';
         label.textContent = '陀螺仪';
-        if (window._gyroInt) { clearInterval(window._gyroInt); window._gyroInt = null; }
-        setTimeout(() => { if (debugEl) debugEl.style.display = 'none'; }, 3000);
         showToast('陀螺仪已关闭');
       }
     } catch (e) {
-      debugLog('❌ 异常: ' + (e.message || e));
       showToast('陀螺仪异常');
     } finally {
       window._gyroToggling = false;
@@ -905,9 +853,8 @@ function setupEventListeners() {
 
   // ── Camera mode toggle ──
   window.toggleCameraMode = function() {
-    if (!window.SharpViewViewer) { showToast('渲染器未加载'); return; }
-    if (typeof window.SharpViewViewer.toggleCameraMode !== 'function') {
-      showToast('相机模式方法不存在');
+    if (!window.SharpViewViewer || typeof window.SharpViewViewer.toggleCameraMode !== 'function') {
+      showToast('渲染器未就绪');
       return;
     }
     try {
@@ -919,7 +866,7 @@ function setupEventListeners() {
       }
       showToast(mode === 'free' ? '自由移动模式' : '轨道模式');
     } catch (e) {
-      showToast('切换失败: ' + (e.message || e));
+      showToast('切换失败');
     }
   };
   document.getElementById('viewer-mode')?.addEventListener('click', (e) => {
