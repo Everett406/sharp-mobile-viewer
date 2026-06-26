@@ -34,6 +34,81 @@ jobs:
       - name: Create Android project
         run: npx cap add android
 
+      - name: Configure Android project
+        run: |
+          # Extract version from git tag (e.g., v0.7.0 → versionName=0.7.0, versionCode=70)
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION_NAME="${TAG_NAME#v}"
+          MAJOR=$(echo "$VERSION_NAME" | cut -d. -f1)
+          MINOR=$(echo "$VERSION_NAME" | cut -d. -f2)
+          PATCH=$(echo "$VERSION_NAME" | cut -d. -f3)
+          VERSION_CODE=$((MAJOR * 100 + MINOR * 10 + PATCH))
+          echo "Version: $VERSION_NAME (code: $VERSION_CODE)"
+
+          # 1. Copy Gyroscope plugin
+          mkdir -p android/app/src/main/java/com/sharpmobile/app
+          cp android-plugins/GyroscopePlugin.java android/app/src/main/java/com/sharpmobile/app/
+
+          # 2. Replace MainActivity to register plugin
+          cat > android/app/src/main/java/com/sharpmobile/app/MainActivity.java << 'JAVA'
+          package com.sharpmobile.app;
+
+          import android.os.Bundle;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  registerPlugin(GyroscopePlugin.class);
+                  super.onCreate(savedInstanceState);
+              }
+          }
+          JAVA
+
+          # 3. Set version code/name in build.gradle
+          sed -i "s/versionCode 1/versionCode $VERSION_CODE/" android/app/build.gradle
+          sed -i "s/versionName \"1.0\"/versionName \"$VERSION_NAME\"/" android/app/build.gradle
+
+          # 4. Allow screen rotation (fullSensor = both portrait and landscape)
+          sed -i 's/android:screenOrientation="portrait"/android:screenOrientation="fullSensor"/' android/app/src/main/AndroidManifest.xml
+
+          # 5. Generate app icon from source image
+          pip install Pillow --break-system-packages -q
+          python3 - << 'PYTHON'
+          from PIL import Image
+          import os
+
+          src = Image.open('assets/app-icon.jpg').convert('RGBA')
+          # Make a square 512x512 icon
+          src = src.resize((512, 512), Image.LANCZOS)
+
+          sizes = {
+              'mipmap-mdpi': 48,
+              'mipmap-hdpi': 72,
+              'mipmap-xhdpi': 96,
+              'mipmap-xxhdpi': 144,
+              'mipmap-xxxhdpi': 192,
+          }
+          for folder, size in sizes.items():
+              path = f'android/app/src/main/res/{folder}/ic_launcher.png'
+              os.makedirs(os.path.dirname(path), exist_ok=True)
+              src.resize((size, size), Image.LANCZOS).save(path)
+              # Round icon variant
+              src.resize((size, size), Image.LANCZOS).save(path.replace('ic_launcher', 'ic_launcher_round'))
+
+          # Foreground for adaptive icon (v26+)
+          for folder in ['mipmap-anydpi-v26']:
+              path = f'android/app/src/main/res/{folder}'
+              os.makedirs(path, exist_ok=True)
+          PYTHON
+
+          # 6. Update AndroidManifest to use custom icon
+          sed -i 's/@mipmap\/ic_launcher/@mipmap\/ic_launcher/g' android/app/src/main/AndroidManifest.xml
+
+          echo "=== Android project configured ==="
+          cat android/app/src/main/java/com/sharpmobile/app/MainActivity.java
+          grep -E "versionCode|versionName" android/app/build.gradle
+
       - name: Copy web assets
         run: npx cap sync android
 

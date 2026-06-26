@@ -15,6 +15,10 @@
 import * as THREE from "three";
 import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { registerPlugin } from "@capacitor/core";
+
+// Register native Gyroscope plugin (provides sensor data + orientation lock)
+const Gyroscope = registerPlugin("Gyroscope");
 
 const LOAD_TIMEOUT_MS = 30000;
 
@@ -35,6 +39,8 @@ const Viewer = {
   animationId: null,
   resizeObserver: null,
   fpsCounter: { frames: 0, lastTime: 0 },
+  _landscape: false,
+  cameraInfo: null,
   gyro: {
     enabled: false,
     raw: { beta: 0, gamma: 0 },
@@ -598,8 +604,8 @@ const Viewer = {
 
   /**
    * Toggle gyroscope parallax on/off.
-   * Uses standard Web APIs: DeviceOrientationEvent + DeviceMotionEvent.
-   * Android WebView supports these natively (no plugin needed).
+   * Uses native Capacitor plugin (direct SensorManager access) for reliability.
+   * Falls back to Web APIs if native plugin unavailable.
    */
   async toggleGyro() {
     if (this.gyro.enabled) {
@@ -607,26 +613,51 @@ const Viewer = {
       return false;
     }
 
-    // Reset raw values
     this.gyro.raw = { beta: 0, gamma: 0 };
+
+    // Strategy 1: Native Capacitor plugin (most reliable on Android)
+    try {
+      const result = await Gyroscope.start();
+      if (result && result.started) {
+        this.gyro.nativeListener = await Gyroscope.addListener("orientation", (data) => {
+          if (data.beta != null) this.gyro.raw.beta = data.beta;
+          if (data.gamma != null) this.gyro.raw.gamma = data.gamma;
+        });
+        this.gyro.enabled = true;
+        this.gyro.method = result.method || "native";
+        console.log("[Viewer] Gyroscope enabled via native plugin:", result.method);
+        return true;
+      }
+      console.log("[Viewer] Native plugin started but no sensors:", result);
+    } catch (nativeErr) {
+      console.log("[Viewer] Native plugin unavailable:", nativeErr.message);
+    }
+
+    // Strategy 2: Web API fallback
     return this._enableWebFallback();
   },
 
   _disableGyro() {
     this.gyro.enabled = false;
+    if (this.gyro.nativeListener) {
+      try { this.gyro.nativeListener.remove(); } catch (e) {}
+      this.gyro.nativeListener = null;
+    }
+    // Also stop native sensor listening
+    try { Gyroscope.stop(); } catch (e) {}
     if (this.gyro.webHandler) {
-      window.removeEventListener('deviceorientation', this.gyro.webHandler);
+      window.removeEventListener("deviceorientation", this.gyro.webHandler);
       this.gyro.webHandler = null;
     }
     if (this.gyro.motionHandler) {
-      window.removeEventListener('devicemotion', this.gyro.motionHandler);
+      window.removeEventListener("devicemotion", this.gyro.motionHandler);
       this.gyro.motionHandler = null;
     }
     if (this.cameraPivot) {
       this.cameraPivot.quaternion.set(0, 0, 0, 1);
     }
     this.gyro.smooth = { beta: 0, gamma: 0 };
-    console.log('[Viewer] Gyroscope disabled');
+    console.log("[Viewer] Gyroscope disabled");
   },
 
   _enableWebFallback() {
@@ -672,6 +703,35 @@ const Viewer = {
     }, 2000);
 
     return true;
+  },
+
+  /**
+   * Toggle landscape/portrait orientation using native plugin.
+   */
+  async toggleLandscape() {
+    try {
+      if (this._landscape) {
+        await Gyroscope.lockPortrait();
+        this._landscape = false;
+        return false;
+      } else {
+        await Gyroscope.lockLandscape();
+        this._landscape = true;
+        return true;
+      }
+    } catch (e) {
+      console.error('[Viewer] Landscape toggle failed:', e);
+      return null;
+    }
+  },
+
+  async resetOrientation() {
+    if (this._landscape) {
+      try {
+        await Gyroscope.lockPortrait();
+        this._landscape = false;
+      } catch (e) {}
+    }
   },
 
   /**

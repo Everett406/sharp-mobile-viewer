@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.6.2';
+const APP_VERSION = '0.7.0';
 
 const App = {
   currentPage: 'welcome',
@@ -804,6 +804,43 @@ function setupEventListeners() {
       label.textContent = '陀螺仪';
       showToast('陀螺仪已关闭');
     }
+  });
+
+  // ── Landscape toggle ──
+  let isLandscape = false;
+  document.getElementById('viewer-rotate')?.addEventListener('click', async () => {
+    const btn = document.getElementById('viewer-rotate');
+    const label = document.getElementById('viewer-rotate-label');
+    if (!App.viewerModuleLoaded || !window.SharpViewViewer) {
+      showToast('渲染器未就绪');
+      return;
+    }
+    const result = await window.SharpViewViewer.toggleLandscape();
+    if (result === null) {
+      showToast('横屏切换失败');
+      return;
+    }
+    isLandscape = result;
+    if (isLandscape) {
+      btn.style.background = 'rgba(201,100,66,0.4)';
+      btn.style.borderColor = 'rgba(201,100,66,0.6)';
+      label.textContent = '竖屏';
+      showToast('已切换横屏');
+    } else {
+      btn.style.background = 'rgba(255,255,255,0.15)';
+      btn.style.borderColor = 'rgba(255,255,255,0.2)';
+      label.textContent = '横屏';
+      showToast('已切换竖屏');
+    }
+  });
+
+  // Reset landscape when leaving viewer
+  document.getElementById('viewer-back')?.addEventListener('click', async () => {
+    if (isLandscape && App.viewerModuleLoaded && window.SharpViewViewer) {
+      await window.SharpViewViewer.resetOrientation();
+      isLandscape = false;
+    }
+    Router.navigate('home');
   });
 
   // ── Viewer status listener (receives loading/error/ready from viewer.js) ──
