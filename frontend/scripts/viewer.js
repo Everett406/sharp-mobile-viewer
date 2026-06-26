@@ -829,9 +829,9 @@ const Viewer = {
   },
 };
 
-// Directly assign to window — esbuild IIFE format with exports creates a
-// namespace wrapper { default: Viewer, SharpViewViewer: Viewer } which breaks
-// property access. Assigning directly ensures window.SharpViewViewer IS the Viewer object.
+// Assign Viewer directly to window. 
+// NOTE: esbuild --global-name creates a top-level var that overwrites window assignment.
+// The build command must use --global-name=__sv_bundle (unused) to avoid this conflict.
 window.SharpViewViewer = Viewer;
 
 // ═══════════════════════════════════════════════════════════
