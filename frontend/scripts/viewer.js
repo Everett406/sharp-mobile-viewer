@@ -55,12 +55,16 @@ const Viewer = {
   gyro: {
     enabled: false,
     raw: { beta: 0, gamma: 0 },
+    ref: { beta: null, gamma: null },   // Reference angle captured on enable
+    prev: { beta: 0, gamma: 0 },        // Previous accepted reading
     smooth: { beta: 0, gamma: 0 },
     target: { beta: 0, gamma: 0 },
-    maxInput: 25,     // Clamp input to ±25°
-    maxTilt: 0.15,    // Max output tilt ~8.6° in radians (more visible)
-    deadzone: 1.0,    // Ignore tiny movements
-    lerpFactor: 0.12, // Smoothing (faster response)
+    maxInput: 30,     // Max delta from reference to use
+    maxTilt: 0.2,     // Max output tilt in radians (~11°)
+    deadzone: 1.5,    // Ignore delta < 1.5°
+    lerpFactor: 0.08, // Smoothing speed
+    outlierThreshold: 35, // Reject jumps > 35° between readings
+    refReady: false,  // Whether reference has been captured
     handler: null,
   },
   settings: {
@@ -559,20 +563,32 @@ const Viewer = {
       }
 
       // Apply gyroscope parallax to pivot (after controls.update)
-      if (this.gyro.enabled && this.cameraPivot) {
+      if (this.gyro.enabled && this.cameraPivot && this.gyro.refReady) {
         const g = this.gyro;
-        // Map raw angles to target tilt
-        let gamma = THREE.MathUtils.clamp(g.raw.gamma, -g.maxInput, g.maxInput);
-        let beta = THREE.MathUtils.clamp(g.raw.beta, -g.maxInput, g.maxInput);
-        if (Math.abs(gamma) < g.deadzone) gamma = 0;
-        if (Math.abs(beta) < g.deadzone) beta = 0;
 
-        g.target.gamma = (gamma / g.maxInput) * g.maxTilt;
-        g.target.beta = (beta / g.maxInput) * g.maxTilt;
+        // Compute delta from reference angle
+        let dBeta = g.raw.beta - g.ref.beta;
+        let dGamma = g.raw.gamma - g.ref.gamma;
+
+        // Handle angle wraparound for gamma (can go ±180°)
+        if (dGamma > 180) dGamma -= 360;
+        if (dGamma < -180) dGamma += 360;
+
+        // Clamp delta to max input range
+        dBeta = THREE.MathUtils.clamp(dBeta, -g.maxInput, g.maxInput);
+        dGamma = THREE.MathUtils.clamp(dGamma, -g.maxInput, g.maxInput);
+
+        // Apply deadzone
+        if (Math.abs(dBeta) < g.deadzone) dBeta = 0;
+        if (Math.abs(dGamma) < g.deadzone) dGamma = 0;
+
+        // Map delta to target tilt
+        g.target.beta = (dBeta / g.maxInput) * g.maxTilt;
+        g.target.gamma = (dGamma / g.maxInput) * g.maxTilt;
 
         // Smooth with lerp
-        g.smooth.gamma += (g.target.gamma - g.smooth.gamma) * g.lerpFactor;
         g.smooth.beta += (g.target.beta - g.smooth.beta) * g.lerpFactor;
+        g.smooth.gamma += (g.target.gamma - g.smooth.gamma) * g.lerpFactor;
 
         // Apply to pivot: gamma → Z axis (left/right parallax), beta → X axis (up/down)
         gyroEuler.set(g.smooth.beta, 0, g.smooth.gamma, 'YXZ');
@@ -630,24 +646,51 @@ const Viewer = {
     }
 
     this.gyro.raw = { beta: 0, gamma: 0 };
+    this.gyro.ref = { beta: null, gamma: null };
+    this.gyro.refReady = false;
+    this.gyro.prev = { beta: 0, gamma: 0 };
+    this.gyro.smooth = { beta: 0, gamma: 0 };
+
+    // Helper: process incoming sensor data with outlier rejection + reference capture
+    const processGyroData = (data) => {
+      if (data.beta == null || data.gamma == null) return;
+      let b = data.beta;
+      let g = data.gamma;
+
+      // Outlier rejection: reject if jump from previous accepted reading is too large
+      if (this.gyro.prev.beta !== 0 || this.gyro.prev.gamma !== 0) {
+        const db = Math.abs(b - this.gyro.prev.beta);
+        const dg = Math.abs(g - this.gyro.prev.gamma);
+        // Handle angle wraparound (e.g. 179° vs -179° = 2° difference)
+        const dbWrap = Math.min(db, 360 - db);
+        const dgWrap = Math.min(dg, 360 - dg);
+        if (dbWrap > this.gyro.outlierThreshold || dgWrap > this.gyro.outlierThreshold) {
+          return; // Reject this reading
+        }
+      }
+      this.gyro.prev.beta = b;
+      this.gyro.prev.gamma = g;
+
+      // Capture reference angle from first accepted reading
+      if (!this.gyro.refReady) {
+        this.gyro.ref.beta = b;
+        this.gyro.ref.gamma = g;
+        this.gyro.refReady = true;
+        console.log('[Viewer] Gyro reference captured: β=' + b.toFixed(1) + '° γ=' + g.toFixed(1) + '°');
+      }
+
+      this.gyro.raw.beta = b;
+      this.gyro.raw.gamma = g;
+    };
 
     // Strategy 1: Native Capacitor plugin (most reliable on Android)
     const Gyroscope = getGyroPlugin();
-    console.log("[Viewer] Gyroscope plugin object:", Gyroscope ? "found" : "NOT found");
-    console.log("[Viewer] window.Capacitor:", typeof window.Capacitor);
-    if (window.Capacitor) {
-      console.log("[Viewer] Capacitor.Plugins keys:", Object.keys(window.Capacitor.Plugins || {}));
-    }
     if (Gyroscope) {
       try {
         const result = await Gyroscope.start();
-        console.log("[Viewer] Native start result:", JSON.stringify(result));
         if (result && result.started) {
-          // In Capacitor 6, addListener returns a Promise<PluginListenerHandle>
           const handle = await Gyroscope.addListener("orientation", (data) => {
-            console.log("[Viewer] Gyro data:", data.beta?.toFixed(1), data.gamma?.toFixed(1));
-            if (data.beta != null) this.gyro.raw.beta = data.beta;
-            if (data.gamma != null) this.gyro.raw.gamma = data.gamma;
+            processGyroData(data);
           });
           this.gyro.nativeHandle = handle;
           this.gyro.enabled = true;
@@ -655,12 +698,9 @@ const Viewer = {
           console.log("[Viewer] Gyroscope enabled via native plugin:", result.method);
           return true;
         }
-        console.log("[Viewer] Native plugin started but no sensors:", result);
       } catch (nativeErr) {
         console.log("[Viewer] Native plugin error:", nativeErr.message || nativeErr);
       }
-    } else {
-      console.log("[Viewer] Native Gyroscope plugin not found, trying Web API");
     }
 
     // Strategy 2: Web API fallback
@@ -669,6 +709,8 @@ const Viewer = {
 
   _disableGyro() {
     this.gyro.enabled = false;
+    this.gyro.refReady = false;
+    this.gyro.ref = { beta: null, gamma: null };
     // Stop native plugin
     const Gyroscope = getGyroPlugin();
     if (Gyroscope) {
@@ -698,12 +740,24 @@ const Viewer = {
 
     // DeviceOrientationEvent: gives absolute beta/gamma angles
     this.gyro.webHandler = (e) => {
-      if (e.beta !== null && e.beta !== undefined) {
-        this.gyro.raw.beta = e.beta;
-        gotData = true;
-      }
-      if (e.gamma !== null && e.gamma !== undefined) {
-        this.gyro.raw.gamma = e.gamma;
+      if (e.beta !== null && e.beta !== undefined && e.gamma !== null && e.gamma !== undefined) {
+        // Process through the same pipeline (outlier rejection + reference capture)
+        let b = e.beta;
+        let g = e.gamma;
+        if (this.gyro.prev.beta !== 0 || this.gyro.prev.gamma !== 0) {
+          const dbWrap = Math.min(Math.abs(b - this.gyro.prev.beta), 360 - Math.abs(b - this.gyro.prev.beta));
+          const dgWrap = Math.min(Math.abs(g - this.gyro.prev.gamma), 360 - Math.abs(g - this.gyro.prev.gamma));
+          if (dbWrap > this.gyro.outlierThreshold || dgWrap > this.gyro.outlierThreshold) return;
+        }
+        this.gyro.prev.beta = b;
+        this.gyro.prev.gamma = g;
+        if (!this.gyro.refReady) {
+          this.gyro.ref.beta = b;
+          this.gyro.ref.gamma = g;
+          this.gyro.refReady = true;
+        }
+        this.gyro.raw.beta = b;
+        this.gyro.raw.gamma = g;
         gotData = true;
       }
     };
