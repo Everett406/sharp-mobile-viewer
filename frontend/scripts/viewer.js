@@ -317,9 +317,10 @@ const Viewer = {
   },
 
   /**
-   * Frame the model: keep camera near origin (matching the photo capture viewpoint),
-   * set OrbitControls target to model center, and move camera to a close distance
-   * that fits the model in view. This gives the "photo-aligned" default view.
+   * Frame the model to fill the viewport nicely.
+   * Uses the bounding box to determine the best viewing direction and distance.
+   * The camera looks at the model center from a direction that shows the
+   * largest face of the bounding box.
    */
   autoFrame() {
     if (!this.splat || !this.camera) return;
@@ -335,15 +336,37 @@ const Viewer = {
 
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
-      const maxDim = Math.max(size.x, size.y, size.z, 0.001);
 
-      // Calculate distance so the model fills ~80% of the viewport.
-      // Based on FOV: distance = (maxDim / 2) / tan(fov/2)
+      console.log('[Viewer] Bounding box:', {
+        center: [center.x.toFixed(3), center.y.toFixed(3), center.z.toFixed(3)],
+        size: [size.x.toFixed(3), size.y.toFixed(3), size.z.toFixed(3)]
+      });
+
+      // Determine the best viewing direction:
+      // Look along the axis with the SMALLEST dimension (shows the largest face).
+      // For SHARP output, the model typically faces the camera along Z,
+      // so we look from +Z towards -Z by default.
       const fovRad = THREE.MathUtils.degToRad(this.camera.fov);
-      const distance = (maxDim / 2) / Math.tan(fovRad / 2) / 0.8;
+      const aspect = this.camera.aspect;
 
-      // Position camera along the -Z axis from model center
-      // This matches the original photo capture direction (camera looking at scene from +Z)
+      // The visible height at distance d is: h = 2 * d * tan(fov/2)
+      // The visible width is: w = h * aspect
+      // We want the model's largest "face" dimension to fill ~90% of the viewport.
+      
+      // For looking along Z (default): visible dimensions are X (width) and Y (height)
+      const visibleWidth = size.x;
+      const visibleHeight = size.y;
+      
+      // Calculate distance needed to fit both dimensions
+      // height fit: d = (visibleHeight / 2) / tan(fov/2) / fillFactor
+      // width fit: d = (visibleWidth / 2) / tan(fov/2 * aspect) / fillFactor
+      // Use the larger of the two distances
+      const fillFactor = 0.9; // Fill 90% of viewport
+      const distHeight = (visibleHeight / 2) / Math.tan(fovRad / 2) / fillFactor;
+      const distWidth = (visibleWidth / 2) / (Math.tan(fovRad / 2) * aspect) / fillFactor;
+      const distance = Math.max(distHeight, distWidth);
+
+      // Camera looks from +Z towards model center
       this.camera.position.set(center.x, center.y, center.z + distance);
       this.camera.up.set(0, 1, 0);
       this.camera.lookAt(center);
@@ -351,17 +374,16 @@ const Viewer = {
       this.controls.update();
 
       console.log('[Viewer] Auto-framed:', {
-        center: [center.x.toFixed(3), center.y.toFixed(3), center.z.toFixed(3)],
-        size: [size.x.toFixed(3), size.y.toFixed(3), size.z.toFixed(3)],
-        distance: distance.toFixed(3)
+        distance: distance.toFixed(3),
+        fov: this.camera.fov,
+        aspect: aspect.toFixed(2)
       });
     } catch (e) {
       console.log('[Viewer] Auto-frame failed:', e.message);
-      // Fallback: look down -Z from origin (SHARP default viewpoint)
-      this.camera.position.set(0, 0, 0.5);
+      this.camera.position.set(0, 0, 1);
       this.camera.up.set(0, 1, 0);
-      this.camera.lookAt(0, 0, -1);
-      this.controls.target.set(0, 0, -1);
+      this.camera.lookAt(0, 0, 0);
+      this.controls.target.set(0, 0, 0);
       this.controls.update();
     }
   },
@@ -370,10 +392,10 @@ const Viewer = {
     if (this.splat && this.splat.isInitialized) {
       this.autoFrame();
     } else if (this.camera) {
-      this.camera.position.set(0, 0, 0.5);
+      this.camera.position.set(0, 0, 1);
       this.camera.up.set(0, 1, 0);
-      this.camera.lookAt(0, 0, -1);
-      this.controls.target.set(0, 0, -1);
+      this.camera.lookAt(0, 0, 0);
+      this.controls.target.set(0, 0, 0);
       this.controls.update();
     }
   },
