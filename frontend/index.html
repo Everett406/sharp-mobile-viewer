@@ -288,7 +288,7 @@
           </div>
           <h1 style="font-family:var(--font-display);font-weight:500;font-size:28px;color:var(--foreground);margin:0 0 6px 0">SharpView</h1>
           <div class="flex items-center gap-2 mb-3">
-            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.4.7</span>
+            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.4.8</span>
             <span class="badge muted" style="background:var(--brand-100);color:var(--brand-700);font-size:11px;min-height:22px;padding:0 8px">最新版本</span>
           </div>
           <p style="font-family:var(--font-serif);font-weight:400;font-size:14px;color:var(--secondary-foreground);font-style:italic;margin:0;text-align:center">将照片转化为 3D 高斯泼溅场景</p>
@@ -481,17 +481,17 @@
         </button>
       </header>
       <!-- Canvas 容器 -->
-      <div id="viewer-canvas-container" class="flex-1 flex items-center justify-center" style="position:relative">
-        <div id="viewer-placeholder" class="flex flex-col items-center justify-center">
+      <div id="viewer-canvas-container" class="flex-1" style="position:relative;overflow:hidden">
+        <div id="viewer-placeholder" class="flex flex-col items-center justify-center" style="position:absolute;inset:0;z-index:5">
           <div class="w-16 h-16 mb-4 rounded-2xl flex items-center justify-center" style="background:rgba(255,255,255,0.1)">
             <i data-lucide="box" class="w-8 h-8" style="color:rgba(255,255,255,0.4)"></i>
           </div>
           <p style="font:500 14px var(--font-sans);color:rgba(255,255,255,0.5);margin:0 0 4px 0">查看器</p>
           <p style="font:400 12px var(--font-sans);color:rgba(255,255,255,0.3);margin:0">从首页选择已完成的 3D 场景</p>
         </div>
-        <canvas id="viewer-canvas" style="display:none;width:100%;height:100%"></canvas>
+        <canvas id="viewer-canvas" style="display:none;width:100%;height:100%;position:absolute;inset:0;z-index:1"></canvas>
         <!-- FPS 信息浮层 -->
-        <div id="viewer-info" class="absolute top-14 left-4 px-2 py-1 rounded-md" style="background:rgba(0,0,0,0.4);display:none">
+        <div id="viewer-info" class="absolute top-14 left-4 px-2 py-1 rounded-md" style="background:rgba(0,0,0,0.4);display:none;z-index:10">
           <span id="viewer-fps" style="font:400 11px var(--font-mono);color:rgba(255,255,255,0.7)">FPS: --</span>
         </div>
       </div>
