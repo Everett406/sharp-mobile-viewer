@@ -46,6 +46,12 @@ const Viewer = {
   fpsCounter: { frames: 0, lastTime: 0 },
   _landscape: false,
   cameraInfo: null,
+  cameraMode: 'orbit', // 'orbit' or 'free'
+  freeMove: {
+    velocity: new THREE.Vector3(),
+    targetVelocity: new THREE.Vector3(),
+    damping: 0.85,
+  },
   gyro: {
     enabled: false,
     raw: { beta: 0, gamma: 0 },
@@ -544,8 +550,13 @@ const Viewer = {
     const animate = () => {
       this.animationId = requestAnimationFrame(animate);
 
-      // Update OrbitControls first (controls camera position/rotation)
-      if (this.controls) this.controls.update();
+      if (this.cameraMode === 'free' && this.controls) {
+        // Free move mode: custom controls handle everything
+        this.controls.update();
+      } else if (this.controls) {
+        // Orbit mode: update OrbitControls first (controls camera position/rotation)
+        this.controls.update();
+      }
 
       // Apply gyroscope parallax to pivot (after controls.update)
       if (this.gyro.enabled && this.cameraPivot) {
@@ -759,6 +770,41 @@ const Viewer = {
         } catch (e) {}
       }
     }
+  },
+
+  /**
+   * Toggle between orbit mode and free-move mode.
+   * Orbit: rotate around a target point, zoom toward target (gets slower close up)
+   * Free: pan/move freely, zoom translates camera forward/back at constant rate
+   */
+  toggleCameraMode() {
+    if (this.cameraMode === 'orbit') {
+      // Switch to free mode
+      this.cameraMode = 'free';
+      if (this.controls) {
+        // In free mode: disable rotate, enable pan, custom zoom
+        this.controls.enableRotate = false;
+        this.controls.enablePan = true;
+        // Override zoom to use constant-speed translation instead of dolly
+        this._originalZoomSpeed = this.controls.zoomSpeed;
+        this.controls.zoomSpeed = 1.2;
+        // Set a very small minDistance to allow getting very close
+        this.controls.minDistance = 0.0001;
+      }
+      console.log('[Viewer] Camera mode: free');
+    } else {
+      // Switch back to orbit mode
+      this.cameraMode = 'orbit';
+      if (this.controls) {
+        this.controls.enableRotate = true;
+        this.controls.enablePan = true;
+        if (this._originalZoomSpeed) {
+          this.controls.zoomSpeed = this._originalZoomSpeed;
+        }
+      }
+      console.log('[Viewer] Camera mode: orbit');
+    }
+    return this.cameraMode;
   },
 
   /**
