@@ -282,8 +282,12 @@ const Viewer = {
         },
       });
 
-      // Critical: quaternion fix for OpenCV → OpenGL coordinate system
-      this.splat.quaternion.set(1, 0, 0, 0);
+      // OpenCV → OpenGL coordinate conversion: rotate 180° around X axis
+      // SHARP outputs OpenCV coords (Y down, Z forward into scene).
+      // Three.js uses OpenGL (Y up, Z toward viewer).
+      // Rotating 180° around X flips both Y and Z, moving scene from +Z to -Z.
+      this.splat.rotation.x = Math.PI;
+      this.splat.updateMatrixWorld(true);
       this.scene.add(this.splat);
 
       console.log('[Viewer] SplatMesh added to scene, awaiting initialization...');
@@ -317,10 +321,11 @@ const Viewer = {
   },
 
   /**
-   * Frame the model to fill the viewport nicely.
-   * Uses the bounding box to determine the best viewing direction and distance.
-   * The camera looks at the model center from a direction that shows the
-   * largest face of the bounding box.
+   * Frame the model to fill the viewport.
+   * SHARP output is OpenCV metric space (scene at +Z, camera at origin).
+   * After rotation.x = PI, scene moves to -Z in OpenGL space.
+   * getBoundingBox() returns LOCAL coords (original PLY), so we must
+   * apply the SplatMesh's world matrix to get actual world position.
    */
   autoFrame() {
     if (!this.splat || !this.camera) return;
@@ -331,56 +336,51 @@ const Viewer = {
         return;
       }
 
-      const box = this.splat.getBoundingBox();
-      if (!box) return;
+      // Must update world matrix before getting bounding box
+      this.splat.updateMatrixWorld(true);
 
-      const center = box.getCenter(new THREE.Vector3());
-      const size = box.getSize(new THREE.Vector3());
+      // getBoundingBox returns LOCAL space (original PLY OpenCV coords)
+      const localBox = this.splat.getBoundingBox();
+      if (!localBox) return;
 
-      console.log('[Viewer] Bounding box:', {
+      // Convert to world space (after the 180° X rotation)
+      const worldBox = localBox.clone().applyMatrix4(this.splat.matrixWorld);
+
+      const center = worldBox.getCenter(new THREE.Vector3());
+      const size = worldBox.getSize(new THREE.Vector3());
+      const radius = size.length() / 2;
+
+      console.log('[Viewer] World bounding box:', {
         center: [center.x.toFixed(3), center.y.toFixed(3), center.z.toFixed(3)],
-        size: [size.x.toFixed(3), size.y.toFixed(3), size.z.toFixed(3)]
+        size: [size.x.toFixed(3), size.y.toFixed(3), size.z.toFixed(3)],
+        radius: radius.toFixed(3)
       });
 
-      // Determine the best viewing direction:
-      // Look along the axis with the SMALLEST dimension (shows the largest face).
-      // For SHARP output, the model typically faces the camera along Z,
-      // so we look from +Z towards -Z by default.
+      // Calculate distance using FOV to fill ~90% of viewport
       const fovRad = THREE.MathUtils.degToRad(this.camera.fov);
-      const aspect = this.camera.aspect;
+      const distance = (radius / Math.sin(fovRad / 2)) * 1.1; // 10% margin
 
-      // The visible height at distance d is: h = 2 * d * tan(fov/2)
-      // The visible width is: w = h * aspect
-      // We want the model's largest "face" dimension to fill ~90% of the viewport.
-      
-      // For looking along Z (default): visible dimensions are X (width) and Y (height)
-      const visibleWidth = size.x;
-      const visibleHeight = size.y;
-      
-      // Calculate distance needed to fit both dimensions
-      // height fit: d = (visibleHeight / 2) / tan(fov/2) / fillFactor
-      // width fit: d = (visibleWidth / 2) / tan(fov/2 * aspect) / fillFactor
-      // Use the larger of the two distances
-      const fillFactor = 0.9; // Fill 90% of viewport
-      const distHeight = (visibleHeight / 2) / Math.tan(fovRad / 2) / fillFactor;
-      const distWidth = (visibleWidth / 2) / (Math.tan(fovRad / 2) * aspect) / fillFactor;
-      const distance = Math.max(distHeight, distWidth);
-
-      // Camera looks from +Z towards model center
+      // Position camera from +Z looking toward -Z (front view = original photo angle)
       this.camera.position.set(center.x, center.y, center.z + distance);
       this.camera.up.set(0, 1, 0);
       this.camera.lookAt(center);
+
+      // Set near/far based on model size (metric scale)
+      this.camera.near = Math.max(distance / 1000, 0.001);
+      this.camera.far = distance * 100;
+      this.camera.updateProjectionMatrix();
+
       this.controls.target.copy(center);
       this.controls.update();
 
       console.log('[Viewer] Auto-framed:', {
         distance: distance.toFixed(3),
-        fov: this.camera.fov,
-        aspect: aspect.toFixed(2)
+        near: this.camera.near.toFixed(4),
+        far: this.camera.far.toFixed(1)
       });
     } catch (e) {
       console.log('[Viewer] Auto-frame failed:', e.message);
-      this.camera.position.set(0, 0, 1);
+      this.camera.position.set(0, 0, 3);
       this.camera.up.set(0, 1, 0);
       this.camera.lookAt(0, 0, 0);
       this.controls.target.set(0, 0, 0);
