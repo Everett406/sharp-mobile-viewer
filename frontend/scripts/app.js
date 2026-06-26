@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.4.5';
+const APP_VERSION = '0.4.6';
 
 const App = {
   currentPage: 'welcome',
@@ -49,7 +49,7 @@ const DEFAULT_CONFIG = {
 };
 
 // ═══════════════════════════════════════════════════════════
-// Storage
+// Storage (localStorage for settings/jobs, IndexedDB for large PLY blobs)
 // ═══════════════════════════════════════════════════════════
 const Storage = {
   async get(key) {
@@ -61,6 +61,66 @@ const Storage = {
   },
   async remove(key) {
     localStorage.removeItem(key);
+  },
+};
+
+// IndexedDB wrapper for storing large PLY blobs (localStorage caps at ~5MB)
+const PLYCache = {
+  _db: null,
+
+  async _getDb() {
+    if (this._db) return this._db;
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('sharpview_ply', 1);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('ply')) {
+          db.createObjectStore('ply');
+        }
+      };
+      req.onsuccess = (e) => { this._db = e.target.result; resolve(this._db); };
+      req.onerror = (e) => reject(e.target.error);
+    });
+  },
+
+  async save(jobId, arrayBuffer) {
+    const db = await this._getDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('ply', 'readwrite');
+      tx.objectStore('ply').put(arrayBuffer, jobId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async load(jobId) {
+    const db = await this._getDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('ply', 'readonly');
+      const req = tx.objectStore('ply').get(jobId);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async remove(jobId) {
+    const db = await this._getDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('ply', 'readwrite');
+      tx.objectStore('ply').delete(jobId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async exists(jobId) {
+    const db = await this._getDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('ply', 'readonly');
+      const req = tx.objectStore('ply').count(jobId);
+      req.onsuccess = () => resolve(req.result > 0);
+      req.onerror = () => reject(req.error);
+    });
   },
 };
 
@@ -395,10 +455,10 @@ const JobManager = {
       if (App.displayTimer) { clearInterval(App.displayTimer); App.displayTimer = null; }
     }
 
-    // Clear local PLY cache if downloaded
+    // Clear local PLY cache (IndexedDB) if downloaded
     if (isCompleted) {
       try {
-        await Storage.remove(`ply_${jobId}`);
+        await PLYCache.remove(jobId);
       } catch (e) {
         console.log('No PLY cache to remove:', e);
       }
@@ -962,22 +1022,21 @@ async function viewJob3D(jobId) {
     }
   }
 
-  // Try to load PLY from localStorage cache
+  // Try to load PLY from IndexedDB cache
   try {
-    const cached = await Storage.get(`ply_${jobId}`);
+    const cached = await PLYCache.load(jobId);
     if (cached) {
-      // Convert base64 to ArrayBuffer
-      const arrayBuffer = base64ToArrayBuffer(cached);
+      const arrayBuffer = cached;
       App.currentPlySize = arrayBuffer.byteLength;
       if (!(await modulePromise)) return;
       window.dispatchEvent(new CustomEvent('sharpview:load-ply', {
         detail: { arrayBuffer, fileName: `${jobId}.ply` }
       }));
-      console.log('Loaded PLY from cache:', arrayBuffer.byteLength, 'bytes');
+      console.log('Loaded PLY from IndexedDB cache:', arrayBuffer.byteLength, 'bytes');
       return;
     }
   } catch (e) {
-    console.log('No cached PLY:', e);
+    console.log('No cached PLY in IndexedDB:', e);
   }
 
   // Not cached — try to re-download from GitHub
@@ -1011,19 +1070,15 @@ async function viewJob3D(jobId) {
     App.currentPlyBlob = plyBlob;
     App.currentPlySize = plyBlob.size;
 
-    // Cache it for next time
+    // Cache to IndexedDB for next time (handles large files, unlike localStorage)
+    const arrayBuffer = await plyBlob.arrayBuffer();
     try {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = reader.result.split(',')[1];
-        Storage.set(`ply_${jobId}`, base64);
-      };
-      reader.readAsDataURL(plyBlob);
+      await PLYCache.save(jobId, arrayBuffer);
+      console.log('PLY cached to IndexedDB:', arrayBuffer.byteLength, 'bytes');
     } catch (e) {
-      console.log('Could not cache PLY:', e);
+      console.log('Could not cache PLY to IndexedDB:', e);
     }
 
-    const arrayBuffer = await plyBlob.arrayBuffer();
     if (!(await modulePromise)) return;
     window.dispatchEvent(new CustomEvent('sharpview:load-ply', {
       detail: { arrayBuffer, fileName: `${jobId}.ply` }
@@ -1268,15 +1323,12 @@ async function handleJobComplete(plyAsset) {
 
     // Store PLY in localStorage for persistence (Phase 4 will use IndexedDB)
     try {
-      // Store as base64 for now (PLY files are small from SHARP)
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = reader.result.split(',')[1];
-        Storage.set(`ply_${App.currentJobId}`, base64);
-      };
-      reader.readAsDataURL(plyBlob);
+      // Cache PLY to IndexedDB (handles large 60MB+ files, unlike localStorage)
+      const arrayBuffer = await plyBlob.arrayBuffer();
+      await PLYCache.save(App.currentJobId, arrayBuffer);
+      console.log('PLY cached to IndexedDB:', arrayBuffer.byteLength, 'bytes');
     } catch (e) {
-      console.log('Could not cache PLY:', e);
+      console.log('Could not cache PLY to IndexedDB:', e);
     }
 
     // Mark job as completed
@@ -1454,28 +1506,33 @@ function showConfirm(title, message) {
 
 /**
  * Wait for the viewer.js module to be loaded.
- * viewer.js is loaded via <script type="module" async> in index.html.
- * It sets window.SharpViewViewer when ready. We poll for it.
+ * viewer-bundle.js is loaded via <script defer> before app.js,
+ * so window.SharpViewViewer should be available immediately.
+ * Falls back to polling in case of slow parsing.
  */
 async function ensureViewerModule() {
   if (App.viewerModuleLoaded) return;
   if (App.viewerModuleLoading) return App.viewerModuleLoading;
 
   App.viewerModuleLoading = (async () => {
-    // Poll for window.SharpViewViewer to be available
-    // (set by the async module script in index.html)
-    const maxWait = 30000; // 30s timeout
-    const start = Date.now();
+    // Check immediately first (bundle loaded via defer before app.js)
+    if (window.SharpViewViewer) {
+      App.viewerModuleLoaded = true;
+      console.log('[App] Viewer module ready (immediate)');
+      return;
+    }
 
+    // Fallback: poll for window.SharpViewViewer
+    const maxWait = 30000;
+    const start = Date.now();
     while (!window.SharpViewViewer) {
       if (Date.now() - start > maxWait) {
-        throw new Error('3D 渲染器加载超时 (30s)');
+        throw new Error('3D 渲染器加载超时 (30s)，请检查应用完整性');
       }
       await new Promise(r => setTimeout(r, 100));
     }
-
     App.viewerModuleLoaded = true;
-    console.log('[App] Viewer module ready (window.SharpViewViewer available)');
+    console.log('[App] Viewer module ready (polled)');
   })();
 
   return App.viewerModuleLoading;
@@ -1533,7 +1590,7 @@ async function deleteCurrentViewerCache() {
   if (!confirmed) return;
 
   try {
-    await Storage.remove(`ply_${App.currentViewJobId}`);
+    await PLYCache.remove(App.currentViewJobId);
   } catch (e) {
     console.log('No cache to remove:', e);
   }
