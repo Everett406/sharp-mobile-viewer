@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.8.1';
+const APP_VERSION = '0.9.0';
 
 const App = {
   currentPage: 'welcome',
@@ -788,8 +788,11 @@ function setupEventListeners() {
 
   // ── Viewer page ──
   document.getElementById('viewer-back')?.addEventListener('click', () => {
-    if (App.viewerModuleLoaded) window.dispatchEvent(new Event('sharpview:dispose'));
+    // Navigate first, dispose in background for instant response
     Router.navigate('home');
+    if (App.viewerModuleLoaded) {
+      setTimeout(() => window.dispatchEvent(new Event('sharpview:dispose')), 0);
+    }
   });
   document.getElementById('viewer-settings-btn')?.addEventListener('click', () => {
     syncViewerSettingsUI();
@@ -806,13 +809,13 @@ function setupEventListeners() {
     deleteCurrentViewerCache();
   });
 
-  // ── Gyroscope toggle (with on-screen debug) ──
-  document.getElementById('viewer-gyro')?.addEventListener('click', async () => {
+  // ── Gyroscope toggle ──
+  // Use both addEventListener AND a global function for reliability
+  window.toggleGyro = async function() {
     const debugEl = document.getElementById('gyro-debug');
     const btn = document.getElementById('viewer-gyro');
     const label = document.getElementById('viewer-gyro-label');
 
-    // Show debug overlay immediately
     const debugLog = (msg) => {
       console.log('[GyroDebug]', msg);
       if (debugEl) {
@@ -823,69 +826,93 @@ function setupEventListeners() {
       }
     };
 
-    if (!App.viewerModuleLoaded || !window.SharpViewViewer) {
-      showToast('渲染器未就绪');
-      debugLog('错误: 渲染器未加载');
+    if (!debugEl || !btn) {
+      alert('错误: 找不到陀螺仪按钮或调试元素');
+      return;
+    }
+
+    if (!window.SharpViewViewer) {
+      showToast('渲染器未加载');
+      debugLog('错误: window.SharpViewViewer 不存在');
+      return;
+    }
+
+    if (!window.SharpViewViewer.gyro) {
+      showToast('陀螺仪模块不存在');
+      debugLog('错误: gyro 对象不存在');
       return;
     }
 
     if (!window.SharpViewViewer.gyro.enabled) {
-      // Enable
       debugEl.textContent = '';
       showToast('正在开启陀螺仪...');
-      debugLog('=== 开始开启陀螺仪 ===');
-      debugLog(`window.Capacitor: ${typeof window.Capacitor}`);
+      debugLog('=== 开始 ===');
+      debugLog(`Capacitor: ${typeof window.Capacitor}`);
       if (window.Capacitor) {
-        debugLog(`Capacitor.platform: ${window.Capacitor.platform}`);
-        debugLog(`Plugins: ${Object.keys(window.Capacitor.Plugins || {}).join(', ') || '(空)'}`);
-      } else {
-        debugLog('window.Capacitor 不存在 — 原生运行时未注入');
+        debugLog(`Plugins: ${Object.keys(window.Capacitor.Plugins || {}).join(',') || '(空)'}`);
       }
 
-      const enabled = await window.SharpViewViewer.toggleGyro();
-      if (enabled) {
-        btn.style.background = 'rgba(201,100,66,0.4)';
-        btn.style.borderColor = 'rgba(201,100,66,0.6)';
-        label.textContent = '陀螺仪 开';
-        debugLog(`✅ 已开启 (方法: ${window.SharpViewViewer.gyro.method || 'web'})`);
-        showToast('陀螺仪已开启');
+      try {
+        const enabled = await window.SharpViewViewer.toggleGyro();
+        if (enabled) {
+          btn.style.background = 'rgba(201,100,66,0.4)';
+          label.textContent = '陀螺仪 ON';
+          debugLog(`✅ 已开启 (${window.SharpViewViewer.gyro.method || 'web'})`);
+          showToast('陀螺仪已开启');
 
-        let dataCount = 0;
-        const monitorInterval = setInterval(() => {
-          const raw = window.SharpViewViewer.gyro.raw;
-          if (raw.beta !== 0 || raw.gamma !== 0) dataCount++;
-        }, 500);
-        setTimeout(() => {
-          clearInterval(monitorInterval);
-          if (dataCount === 0) {
-            debugLog('⚠️ 5秒内未收到传感器数据！');
-          } else {
-            debugLog(`✅ 收到 ${dataCount} 次数据更新`);
-          }
-        }, 5000);
+          let dataCount = 0;
+          const mon = setInterval(() => {
+            const r = window.SharpViewViewer.gyro.raw;
+            if (r.beta !== 0 || r.gamma !== 0) dataCount++;
+          }, 500);
+          setTimeout(() => {
+            clearInterval(mon);
+            debugLog(dataCount === 0 ? '⚠️ 5秒无数据' : `✅ 收到${dataCount}次数据`);
+          }, 5000);
 
-        window._gyroDebugInterval = setInterval(() => {
-          const raw = window.SharpViewViewer.gyro.raw;
-          const smooth = window.SharpViewViewer.gyro.smooth;
-          debugLog(`β=${raw.beta?.toFixed(1)}° γ=${raw.gamma?.toFixed(1)}°`);
-        }, 1000);
-      } else {
-        debugLog('❌ 开启失败');
-        showToast('陀螺仪开启失败');
+          window._gyroInt = setInterval(() => {
+            const r = window.SharpViewViewer.gyro.raw;
+            debugLog(`β=${r.beta?.toFixed(1)}° γ=${r.gamma?.toFixed(1)}°`);
+          }, 1000);
+        } else {
+          debugLog('❌ 开启失败');
+          showToast('陀螺仪开启失败');
+        }
+      } catch (e) {
+        debugLog('❌ 异常: ' + e.message);
+        showToast('陀螺仪异常: ' + e.message);
       }
     } else {
-      // Disable
       await window.SharpViewViewer.toggleGyro();
       btn.style.background = 'rgba(255,255,255,0.15)';
-      btn.style.borderColor = 'rgba(255,255,255,0.2)';
       label.textContent = '陀螺仪';
-      if (window._gyroDebugInterval) {
-        clearInterval(window._gyroDebugInterval);
-        window._gyroDebugInterval = null;
-      }
+      if (window._gyroInt) { clearInterval(window._gyroInt); window._gyroInt = null; }
       setTimeout(() => { if (debugEl) debugEl.style.display = 'none'; }, 3000);
       showToast('陀螺仪已关闭');
     }
+  };
+
+  // Attach via addEventListener as well
+  document.getElementById('viewer-gyro')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    window.toggleGyro();
+  });
+
+  // ── Camera mode toggle (orbit vs free) ──
+  window.toggleCameraMode = function() {
+    if (!window.SharpViewViewer) { showToast('渲染器未加载'); return; }
+    const mode = window.SharpViewViewer.toggleCameraMode();
+    const btn = document.getElementById('viewer-mode');
+    if (btn) {
+      btn.textContent = mode === 'free' ? '自由' : '轨道';
+      btn.style.background = mode === 'free' ? 'rgba(201,100,66,0.4)' : 'rgba(255,255,255,0.15)';
+    }
+    showToast(mode === 'free' ? '自由移动模式' : '轨道模式');
+  };
+  document.getElementById('viewer-mode')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.toggleCameraMode();
   });
 
   // ── Viewer status listener (receives loading/error/ready from viewer.js) ──
@@ -1107,11 +1134,7 @@ async function viewJob3D(jobId) {
   App.currentPlyBlob = null;
   App.currentPlySize = 0;
 
-  // Dispose any existing viewer content
-  if (App.viewerModuleLoaded) {
-    window.dispatchEvent(new Event('sharpview:dispose'));
-  }
-
+  // Navigate to viewer page FIRST for instant response
   document.getElementById('viewer-title').textContent = `${jobId}.ply`;
 
   // Show loading state with step indicator
@@ -1134,6 +1157,11 @@ async function viewJob3D(jobId) {
   if (window.lucide) lucide.createIcons();
 
   Router.navigate('viewer');
+
+  // Dispose any existing viewer content in background (after navigation)
+  if (App.viewerModuleLoaded) {
+    window.dispatchEvent(new Event('sharpview:dispose'));
+  }
 
   // Load viewer module (Spark + Three.js, bundled locally) in parallel with PLY data
   const modulePromise = ensureViewerModule().then(() => {
