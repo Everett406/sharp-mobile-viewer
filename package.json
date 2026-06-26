@@ -1,6 +1,6 @@
 {
   "name": "sharpview",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "SharpView - 将照片转化为 3D 高斯泼溅场景的 Android App",
   "main": "index.html",
   "scripts": {
@@ -25,6 +25,7 @@
     "@capacitor/camera": "^6.0.2",
     "@capacitor/core": "^6.1.2",
     "@capacitor/filesystem": "^6.0.1",
+    "@capacitor/motion": "^8.0.0",
     "@capacitor/preferences": "^6.0.2",
     "@sparkjsdev/spark": "^2.1.0",
     "three": "^0.180.0"

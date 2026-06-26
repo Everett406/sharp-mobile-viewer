@@ -15,6 +15,7 @@
 import * as THREE from "three";
 import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { Motion } from "@capacitor/motion";
 
 const LOAD_TIMEOUT_MS = 30000;
 
@@ -40,10 +41,10 @@ const Viewer = {
     raw: { beta: 0, gamma: 0 },
     smooth: { beta: 0, gamma: 0 },
     target: { beta: 0, gamma: 0 },
-    maxInput: 30,     // Clamp input to ±30°
-    maxTilt: 0.08,    // Max output tilt ~4.6° in radians
-    deadzone: 1.5,    // Ignore tiny movements
-    lerpFactor: 0.08, // Smoothing
+    maxInput: 25,     // Clamp input to ±25°
+    maxTilt: 0.15,    // Max output tilt ~8.6° in radians (more visible)
+    deadzone: 1.0,    // Ignore tiny movements
+    lerpFactor: 0.12, // Smoothing (faster response)
     handler: null,
   },
   settings: {
@@ -148,6 +149,9 @@ const Viewer = {
       this.controls.zoomToCursor = true;
       this.controls.rotateSpeed = 0.15;
       this.controls.zoomSpeed = 0.6;
+      // Allow very close zoom for detail inspection
+      this.controls.minDistance = 0.001;
+      this.controls.maxDistance = 1000;
       this.controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
       // Use ResizeObserver instead of window.resize (more reliable in Capacitor)
@@ -467,8 +471,8 @@ const Viewer = {
         this.camera.position.set(0, 0, 0);
         this.camera.up.set(0, 1, 0);
         this.camera.lookAt(0, 0, -1);
-        this.camera.near = 0.001;
-        this.camera.far = 1000;
+        this.camera.near = 0.0001;
+        this.camera.far = 10000;
         this.camera.updateProjectionMatrix();
 
         this.controls.target.set(0, 0, -1);
@@ -595,34 +599,112 @@ const Viewer = {
 
   /**
    * Toggle gyroscope parallax on/off.
-   * Uses DeviceOrientationEvent (standard Web API, no plugin needed on Android).
+   * Tries multiple sensor APIs for maximum Android compatibility:
+   * 1. @capacitor/motion plugin
+   * 2. DeviceOrientationEvent (beta/gamma absolute angles)
+   * 3. DeviceMotionEvent (rotationRate as fallback)
    */
-  toggleGyro() {
+  async toggleGyro() {
     if (this.gyro.enabled) {
-      // Disable
-      this.gyro.enabled = false;
-      if (this.gyro.handler) {
-        window.removeEventListener('deviceorientation', this.gyro.handler);
-        this.gyro.handler = null;
-      }
-      // Reset pivot to neutral
-      if (this.cameraPivot) {
-        this.cameraPivot.quaternion.set(0, 0, 0, 1);
-      }
-      this.gyro.smooth = { beta: 0, gamma: 0 };
-      console.log('[Viewer] Gyroscope disabled');
+      this._disableGyro();
       return false;
-    } else {
-      // Enable
-      this.gyro.handler = (e) => {
-        if (e.beta !== null) this.gyro.raw.beta = e.beta;
-        if (e.gamma !== null) this.gyro.raw.gamma = e.gamma;
-      };
-      window.addEventListener('deviceorientation', this.gyro.handler);
-      this.gyro.enabled = true;
-      console.log('[Viewer] Gyroscope enabled');
-      return true;
     }
+
+    // Reset raw values
+    this.gyro.raw = { beta: 0, gamma: 0 };
+
+    // Strategy 1: @capacitor/motion plugin
+    try {
+      this.gyro.handler = await Motion.addListener('orientation', (event) => {
+        if (event.beta != null) this.gyro.raw.beta = event.beta;
+        if (event.gamma != null) this.gyro.raw.gamma = event.gamma;
+      });
+      this.gyro.enabled = true;
+      console.log('[Viewer] Gyroscope enabled via @capacitor/motion');
+
+      // Check if data is actually flowing after 2 seconds
+      setTimeout(() => {
+        if (this.gyro.enabled && this.gyro.raw.beta === 0 && this.gyro.raw.gamma === 0) {
+          console.log('[Viewer] @capacitor/motion no data after 2s, trying fallback...');
+          this._disableGyro();
+          this._enableWebFallback();
+        }
+      }, 2000);
+      return true;
+    } catch (motionErr) {
+      console.log('[Viewer] @capacitor/motion failed:', motionErr.message);
+    }
+
+    // Strategy 2 & 3: Web API fallback
+    return this._enableWebFallback();
+  },
+
+  _disableGyro() {
+    this.gyro.enabled = false;
+    if (this.gyro.handler) {
+      try { this.gyro.handler.remove(); } catch (e) {}
+      this.gyro.handler = null;
+    }
+    if (this.gyro.webHandler) {
+      window.removeEventListener('deviceorientation', this.gyro.webHandler);
+      this.gyro.webHandler = null;
+    }
+    if (this.gyro.motionHandler) {
+      window.removeEventListener('devicemotion', this.gyro.motionHandler);
+      this.gyro.motionHandler = null;
+    }
+    if (this.cameraPivot) {
+      this.cameraPivot.quaternion.set(0, 0, 0, 1);
+    }
+    this.gyro.smooth = { beta: 0, gamma: 0 };
+    console.log('[Viewer] Gyroscope disabled');
+  },
+
+  _enableWebFallback() {
+    let gotData = false;
+
+    // Try DeviceOrientationEvent
+    this.gyro.webHandler = (e) => {
+      if (e.beta !== null && e.beta !== undefined) {
+        this.gyro.raw.beta = e.beta;
+        gotData = true;
+      }
+      if (e.gamma !== null && e.gamma !== undefined) {
+        this.gyro.raw.gamma = e.gamma;
+        gotData = true;
+      }
+    };
+    window.addEventListener('deviceorientation', this.gyro.webHandler);
+
+    // Also try DeviceMotionEvent (some Android devices only fire this)
+    this.gyro.motionHandler = (e) => {
+      if (e.rotationRate) {
+        if (e.rotationRate.beta) {
+          // Integrate rotation rate into accumulated angle (approximate)
+          this.gyro.raw.beta += e.rotationRate.beta * 0.016; // ~60fps
+          this.gyro.raw.beta = THREE.MathUtils.clamp(this.gyro.raw.beta, -45, 45);
+          gotData = true;
+        }
+        if (e.rotationRate.gamma) {
+          this.gyro.raw.gamma += e.rotationRate.gamma * 0.016;
+          this.gyro.raw.gamma = THREE.MathUtils.clamp(this.gyro.raw.gamma, -45, 45);
+          gotData = true;
+        }
+      }
+    };
+    window.addEventListener('devicemotion', this.gyro.motionHandler);
+
+    this.gyro.enabled = true;
+    console.log('[Viewer] Gyroscope enabled via Web API fallback (deviceorientation + devicemotion)');
+
+    // Check if any data flows after 2 seconds
+    setTimeout(() => {
+      if (this.gyro.enabled && !gotData) {
+        console.log('[Viewer] WARNING: No sensor data received after 2s');
+      }
+    }, 2000);
+
+    return true;
   },
 
   /**

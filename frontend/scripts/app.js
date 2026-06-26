@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.6.0';
+const APP_VERSION = '0.6.1';
 
 const App = {
   currentPage: 'welcome',
@@ -690,6 +690,32 @@ function setupEventListeners() {
   // ── Settings page ──
   document.getElementById('settings-back')?.addEventListener('click', () => Router.navigate('home'));
   document.getElementById('settings-go-about')?.addEventListener('click', () => Router.navigate('about'));
+
+  // Auto-save: any settings input change triggers save automatically
+  const autoSave = async () => {
+    await Settings.save();
+    console.log('[App] Settings auto-saved');
+  };
+
+  // Attach auto-save to all settings inputs
+  ['settings-token', 'settings-owner', 'settings-repo', 'settings-max-edge',
+   'settings-release-tag', 'settings-retention', 'settings-timeout'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', autoSave);
+    document.getElementById(id)?.addEventListener('blur', autoSave);
+  });
+
+  // Quality slider auto-save
+  document.getElementById('quality-slider')?.addEventListener('change', autoSave);
+
+  // Segmented controls auto-save
+  document.querySelectorAll('#settings-repo-type .segment, #settings-image-source .segment').forEach(seg => {
+    seg.addEventListener('click', autoSave);
+  });
+
+  // Dark mode auto-save (already handled in toggle, but ensure persistence)
+  document.getElementById('dark-mode-toggle')?.addEventListener('click', autoSave);
+
+  // Keep save button as visual feedback only (auto-saves anyway)
   document.getElementById('settings-save')?.addEventListener('click', async () => {
     await Settings.save();
     showToast('配置已保存');
@@ -758,12 +784,13 @@ function setupEventListeners() {
   });
 
   // ── Gyroscope toggle ──
-  document.getElementById('viewer-gyro')?.addEventListener('click', () => {
+  document.getElementById('viewer-gyro')?.addEventListener('click', async () => {
     if (!App.viewerModuleLoaded || !window.SharpViewViewer) {
       showToast('渲染器未就绪');
       return;
     }
-    const enabled = window.SharpViewViewer.toggleGyro();
+    showToast('正在开启陀螺仪...');
+    const enabled = await window.SharpViewViewer.toggleGyro();
     const btn = document.getElementById('viewer-gyro');
     const label = document.getElementById('viewer-gyro-label');
     if (enabled) {
