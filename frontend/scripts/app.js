@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.5.1';
 
 const App = {
   currentPage: 'welcome',
@@ -45,7 +45,7 @@ const DEFAULT_CONFIG = {
   releaseTag: 'splat-jobs',
   retentionDays: 3,
   maxTimeout: 30,
-  darkMode: 'system',
+  darkMode: 'light',
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -187,7 +187,7 @@ const Settings = {
       releaseTag: document.getElementById('settings-release-tag').value || 'splat-jobs',
       retentionDays: parseInt(document.getElementById('settings-retention').value) || 3,
       maxTimeout: parseInt(document.getElementById('settings-timeout').value) || 30,
-      darkMode: App.config?.darkMode || 'system',
+      darkMode: App.config?.darkMode || 'light',
     };
     App.config = config;
     await Storage.set('sharpview_config', config);
@@ -211,7 +211,7 @@ const Settings = {
 
     this.updateSegmented('settings-repo-type', c.repoType || 'public');
     this.updateSegmented('settings-image-source', c.imageSource || 'album');
-    this.updateDarkModeToggle(c.darkMode || 'system');
+    this.updateDarkModeToggle(c.darkMode || 'light');
   },
 
   updateSegmented(containerId, value) {
@@ -234,12 +234,9 @@ const Settings = {
     if (mode === 'dark') {
       toggle.classList.add('on');
       label.textContent = '深色模式';
-    } else if (mode === 'light') {
-      toggle.classList.remove('on');
-      label.textContent = '浅色模式';
     } else {
       toggle.classList.remove('on');
-      label.textContent = '跟随系统';
+      label.textContent = '亮色模式';
     }
   },
 
@@ -849,17 +846,19 @@ function setupEventListeners() {
     });
   });
 
-  // ── Dark mode toggle ──
+  // ── Dark mode toggle: light → dark → light ──
   document.getElementById('dark-mode-toggle')?.addEventListener('click', () => {
     const toggle = document.getElementById('dark-mode-toggle');
     const label = document.getElementById('dark-mode-label');
     const isOn = toggle.classList.contains('on');
     if (isOn) {
+      // Currently dark, switch to light
       toggle.classList.remove('on');
-      label.textContent = '跟随系统';
-      App.config.darkMode = 'system';
-      Theme.apply('system');
+      label.textContent = '亮色模式';
+      App.config.darkMode = 'light';
+      Theme.apply('light');
     } else {
+      // Currently light, switch to dark
       toggle.classList.add('on');
       label.textContent = '深色模式';
       App.config.darkMode = 'dark';
@@ -1602,7 +1601,7 @@ async function deleteCurrentViewerCache() {
 async function initApp() {
   await Settings.load();
   await JobManager.loadAll();
-  Theme.apply(App.config.darkMode || 'system');
+  Theme.apply(App.config.darkMode || 'light');
   Settings.populateUI();
   setupEventListeners();
 
