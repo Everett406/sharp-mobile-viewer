@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.8.0';
+const APP_VERSION = '0.8.1';
 
 const App = {
   currentPage: 'welcome',
@@ -134,17 +134,35 @@ const Router = {
   pagesWithTabBar: ['home', 'viewer', 'settings'],
   // Tab pages (mutually exclusive, persist as overlays)
   tabPages: ['home', 'viewer', 'settings'],
+  // Tab order for slide direction
+  tabBarOrder: ['home', 'viewer', 'settings'],
 
   navigate(pageId) {
+    const prevPage = App.currentPage;
+
     // Hide all pages
     this.pages.forEach(id => {
       const el = document.getElementById(`page-${id}`);
-      if (el) el.classList.remove('active');
+      if (el) {
+        el.classList.remove('active');
+        // Remove any directional animation classes
+        el.classList.remove('slide-from-right', 'slide-from-left');
+      }
     });
 
     // Show target page
     const target = document.getElementById(`page-${pageId}`);
     if (target) {
+      // Determine slide direction for tab pages
+      if (this.tabBarOrder.includes(prevPage) && this.tabBarOrder.includes(pageId)) {
+        const prevIdx = this.tabBarOrder.indexOf(prevPage);
+        const nextIdx = this.tabBarOrder.indexOf(pageId);
+        if (nextIdx > prevIdx) {
+          target.classList.add('slide-from-right');
+        } else {
+          target.classList.add('slide-from-left');
+        }
+      }
       target.classList.add('active');
       App.currentPage = pageId;
     }
@@ -790,16 +808,11 @@ function setupEventListeners() {
 
   // ── Gyroscope toggle (with on-screen debug) ──
   document.getElementById('viewer-gyro')?.addEventListener('click', async () => {
-    if (!App.viewerModuleLoaded || !window.SharpViewViewer) {
-      showToast('渲染器未就绪');
-      return;
-    }
-
     const debugEl = document.getElementById('gyro-debug');
     const btn = document.getElementById('viewer-gyro');
     const label = document.getElementById('viewer-gyro-label');
 
-    // Show debug overlay
+    // Show debug overlay immediately
     const debugLog = (msg) => {
       console.log('[GyroDebug]', msg);
       if (debugEl) {
@@ -810,14 +823,23 @@ function setupEventListeners() {
       }
     };
 
+    if (!App.viewerModuleLoaded || !window.SharpViewViewer) {
+      showToast('渲染器未就绪');
+      debugLog('错误: 渲染器未加载');
+      return;
+    }
+
     if (!window.SharpViewViewer.gyro.enabled) {
       // Enable
-      debugEl.textContent = ''; // Clear
-      debugLog('开始开启陀螺仪...');
+      debugEl.textContent = '';
+      showToast('正在开启陀螺仪...');
+      debugLog('=== 开始开启陀螺仪 ===');
       debugLog(`window.Capacitor: ${typeof window.Capacitor}`);
       if (window.Capacitor) {
         debugLog(`Capacitor.platform: ${window.Capacitor.platform}`);
-        debugLog(`Plugins: ${Object.keys(window.Capacitor.Plugins || {}).join(', ')}`);
+        debugLog(`Plugins: ${Object.keys(window.Capacitor.Plugins || {}).join(', ') || '(空)'}`);
+      } else {
+        debugLog('window.Capacitor 不存在 — 原生运行时未注入');
       }
 
       const enabled = await window.SharpViewViewer.toggleGyro();
@@ -825,10 +847,9 @@ function setupEventListeners() {
         btn.style.background = 'rgba(201,100,66,0.4)';
         btn.style.borderColor = 'rgba(201,100,66,0.6)';
         label.textContent = '陀螺仪 开';
-        debugLog(`已开启 (方法: ${window.SharpViewViewer.gyro.method || 'web'})`);
+        debugLog(`✅ 已开启 (方法: ${window.SharpViewViewer.gyro.method || 'web'})`);
         showToast('陀螺仪已开启');
 
-        // Monitor data flow for 5 seconds
         let dataCount = 0;
         const monitorInterval = setInterval(() => {
           const raw = window.SharpViewViewer.gyro.raw;
@@ -838,17 +859,15 @@ function setupEventListeners() {
           clearInterval(monitorInterval);
           if (dataCount === 0) {
             debugLog('⚠️ 5秒内未收到传感器数据！');
-            debugLog('可能原因: 传感器不可用或权限被拒');
           } else {
             debugLog(`✅ 收到 ${dataCount} 次数据更新`);
           }
         }, 5000);
 
-        // Update debug with live values every second
         window._gyroDebugInterval = setInterval(() => {
           const raw = window.SharpViewViewer.gyro.raw;
           const smooth = window.SharpViewViewer.gyro.smooth;
-          debugLog(`raw: β=${raw.beta?.toFixed(1)}° γ=${raw.gamma?.toFixed(1)}° | smooth: β=${smooth.beta?.toFixed(3)} γ=${smooth.gamma?.toFixed(3)}`);
+          debugLog(`β=${raw.beta?.toFixed(1)}° γ=${raw.gamma?.toFixed(1)}°`);
         }, 1000);
       } else {
         debugLog('❌ 开启失败');
@@ -864,7 +883,6 @@ function setupEventListeners() {
         clearInterval(window._gyroDebugInterval);
         window._gyroDebugInterval = null;
       }
-      // Hide debug after 3 seconds
       setTimeout(() => { if (debugEl) debugEl.style.display = 'none'; }, 3000);
       showToast('陀螺仪已关闭');
     }

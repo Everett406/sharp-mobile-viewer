@@ -47,7 +47,10 @@
     }
     .page.tab-page.active {
       display: flex;
-      animation: pageFadeIn 0.3s ease-out;
+      animation: pageSlideFromRight 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+    }
+    .page.tab-page.active.slide-from-left {
+      animation: pageSlideFromLeft 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
     }
 
     /* Non-tab pages: overlay entire screen (including tab bar area) */
@@ -61,19 +64,19 @@
     }
     .page:not(.tab-page).active {
       display: flex;
-      animation: pageSlideIn 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
+      animation: pageSlideFromRight 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
     }
 
     /* Tab bar pinned at bottom of flex container */
     #tab-bar { flex-shrink: 0; }
 
     /* Page transition animations */
-    @keyframes pageFadeIn {
-      from { opacity: 0; transform: translateY(8px); }
-      to { opacity: 1; transform: translateY(0); }
+    @keyframes pageSlideFromRight {
+      from { opacity: 0; transform: translateX(60px); }
+      to { opacity: 1; transform: translateX(0); }
     }
-    @keyframes pageSlideIn {
-      from { opacity: 0; transform: translateX(30px); }
+    @keyframes pageSlideFromLeft {
+      from { opacity: 0; transform: translateX(-60px); }
       to { opacity: 1; transform: translateX(0); }
     }
     @keyframes fadeIn {
@@ -335,7 +338,7 @@
           </div>
           <h1 style="font-family:var(--font-display);font-weight:500;font-size:28px;color:var(--foreground);margin:0 0 6px 0">SharpView</h1>
           <div class="flex items-center gap-2 mb-3">
-            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.8.0</span>
+            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.8.1</span>
             <span class="badge muted" style="background:var(--brand-100);color:var(--brand-700);font-size:11px;min-height:22px;padding:0 8px">最新版本</span>
           </div>
           <p style="font-family:var(--font-serif);font-weight:400;font-size:14px;color:var(--secondary-foreground);font-style:italic;margin:0;text-align:center">将照片转化为 3D 高斯泼溅场景</p>
