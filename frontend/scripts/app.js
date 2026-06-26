@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.5.1';
+const APP_VERSION = '0.5.2';
 
 const App = {
   currentPage: 'welcome',
@@ -172,6 +172,11 @@ const Settings = {
   async load() {
     const saved = await Storage.get('sharpview_config');
     App.config = { ...DEFAULT_CONFIG, ...saved };
+    // Migrate: 'system' mode was unreliable in Capacitor WebView, default to 'light'
+    if (App.config.darkMode === 'system' || !App.config.darkMode) {
+      App.config.darkMode = 'light';
+      await Storage.set('sharpview_config', App.config);
+    }
     return App.config;
   },
 

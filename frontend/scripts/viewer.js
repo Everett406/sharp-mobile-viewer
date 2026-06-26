@@ -127,8 +127,8 @@ const Viewer = {
       this.controls.enablePan = true;
       this.controls.enableZoom = true;
       this.controls.zoomToCursor = true;
-      this.controls.rotateSpeed = 0.3;
-      this.controls.zoomSpeed = 0.8;
+      this.controls.rotateSpeed = 0.15;
+      this.controls.zoomSpeed = 0.6;
       this.controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
       // Use ResizeObserver instead of window.resize (more reliable in Capacitor)
@@ -154,6 +154,79 @@ const Viewer = {
       console.error('[Viewer] Init failed:', e);
       this._notifyStatus('error', '渲染器初始化失败', e.message);
       return false;
+    }
+  },
+
+  /**
+   * Extract camera intrinsics from SHARP PLY header.
+   * SHARP stores focal length in 'intrinsic' element (3x3 matrix, f_px at [0] and [4])
+   * and image dimensions in 'image_size' element ([width, height]).
+   * Must be called BEFORE _cleanPlyHeader strips non-vertex elements.
+   */
+  _extractCameraInfo(uint8) {
+    try {
+      const decoder = new TextDecoder();
+      const headerBytes = uint8.slice(0, Math.min(8192, uint8.length));
+      const headerStr = decoder.decode(headerBytes);
+      const endIdx = headerStr.indexOf('end_header\n');
+      if (endIdx < 0) return null;
+
+      const lines = headerStr.split('\n');
+      let fPx = 0, imgWidth = 0, imgHeight = 0;
+
+      // Parse element sizes to locate intrinsic and image_size data
+      let elementOffsets = {};
+      let currentElement = null;
+      let vertexStride = 0;
+      let dataOffset = 0;
+
+      for (const line of lines) {
+        if (line.startsWith('element ')) {
+          const parts = line.split(/\s+/);
+          currentElement = { name: parts[1], count: parseInt(parts[2]), stride: 0 };
+          elementOffsets[parts[1]] = currentElement;
+        } else if (line.startsWith('property ') && currentElement) {
+          // Calculate property size
+          const parts = line.split(/\s+/);
+          const typeMap = { 'char':1,'uchar':1,'int8':1,'uint8':1,'short':2,'ushort':2,'int16':2,'uint16':2,'int':4,'uint':4,'int32':4,'uint32':4,'float':4,'float32':4,'double':8,'float64':8 };
+          const size = typeMap[parts[1]] || 4;
+          currentElement.stride += size;
+        } else if (line === 'end_header') {
+          break;
+        }
+      }
+
+      // Calculate data offset for each element
+      let offset = new TextEncoder().encode(headerStr.slice(0, endIdx + 'end_header\n'.length)).length;
+      for (const elem of Object.values(elementOffsets)) {
+        elem.dataOffset = offset;
+        offset += elem.count * elem.stride;
+      }
+
+      // Read intrinsic (9 floats: [f_px, 0, cx, 0, f_px, cy, 0, 0, 1])
+      if (elementOffsets['intrinsic']) {
+        const elem = elementOffsets['intrinsic'];
+        const view = new DataView(uint8.buffer, uint8.byteOffset, uint8.byteLength);
+        fPx = view.getFloat32(elem.dataOffset, true); // f_px at position [0]
+        console.log('[Viewer] Extracted f_px:', fPx);
+      }
+
+      // Read image_size (2 uints: [width, height])
+      if (elementOffsets['image_size']) {
+        const elem = elementOffsets['image_size'];
+        const view = new DataView(uint8.buffer, uint8.byteOffset, uint8.byteLength);
+        imgWidth = view.getUint32(elem.dataOffset, true);
+        imgHeight = view.getUint32(elem.dataOffset + 4, true);
+        console.log('[Viewer] Extracted image size:', imgWidth, 'x', imgHeight);
+      }
+
+      if (fPx > 0 && imgWidth > 0 && imgHeight > 0) {
+        return { fPx, imgWidth, imgHeight };
+      }
+      return null;
+    } catch (e) {
+      console.log('[Viewer] Could not extract camera info:', e.message);
+      return null;
     }
   },
 
@@ -251,8 +324,11 @@ const Viewer = {
     this._notifyStatus('loading', '正在解析 PLY 数据...');
 
     try {
-      // Clean PLY header if needed
+      // Extract camera intrinsics BEFORE cleaning header
       const rawBytes = new Uint8Array(arrayBuffer);
+      this.cameraInfo = this._extractCameraInfo(rawBytes);
+
+      // Clean PLY header if needed
       const cleanedBytes = this._cleanPlyHeader(rawBytes);
       const finalBytes = cleanedBytes || rawBytes;
 
@@ -321,11 +397,15 @@ const Viewer = {
   },
 
   /**
-   * Frame the model to fill the viewport.
-   * SHARP output is OpenCV metric space (scene at +Z, camera at origin).
-   * After rotation.x = PI, scene moves to -Z in OpenGL space.
-   * getBoundingBox() returns LOCAL coords (original PLY), so we must
-   * apply the SplatMesh's world matrix to get actual world position.
+   * Frame the model using the original camera parameters.
+   *
+   * SHARP captures the photo with camera at origin (0,0,0) in OpenCV space.
+   * The PLY contains the focal length (f_px) and image dimensions.
+   * By using these to set the camera FOV and placing the camera at origin,
+   * we EXACTLY reproduce the original photo viewpoint.
+   *
+   * After rotation.x = PI (OpenCV→OpenGL), the scene moves to -Z.
+   * Camera at origin looking at -Z with the original FOV = perfect match.
    */
   autoFrame() {
     if (!this.splat || !this.camera) return;
@@ -336,59 +416,73 @@ const Viewer = {
         return;
       }
 
-      // Must update world matrix before getting bounding box
       this.splat.updateMatrixWorld(true);
 
-      // getBoundingBox returns LOCAL space (original PLY OpenCV coords)
+      // Get world-space bounding box for near/far calculation
       const localBox = this.splat.getBoundingBox();
-      if (!localBox) return;
+      if (localBox) {
+        const worldBox = localBox.clone().applyMatrix4(this.splat.matrixWorld);
+        const size = worldBox.getSize(new THREE.Vector3());
+        const radius = size.length() / 2;
+        console.log('[Viewer] World bounding box radius:', radius.toFixed(3));
+      }
 
-      // Convert to world space (after the 180° X rotation)
-      const worldBox = localBox.clone().applyMatrix4(this.splat.matrixWorld);
+      if (this.cameraInfo) {
+        // Use original camera focal length to calculate FOV
+        // This exactly reproduces the original photo viewpoint
+        const { fPx, imgWidth, imgHeight } = this.cameraInfo;
+        const fovRad = 2 * Math.atan(imgHeight / (2 * fPx));
+        const fovDeg = THREE.MathUtils.radToDeg(fovRad);
 
-      const center = worldBox.getCenter(new THREE.Vector3());
-      const size = worldBox.getSize(new THREE.Vector3());
-      const radius = size.length() / 2;
+        // Adjust FOV for viewport aspect ratio (contain mode)
+        const imgAspect = imgWidth / imgHeight;
+        const viewAspect = this.camera.aspect;
+        let finalFov = fovDeg;
+        if (viewAspect < imgAspect) {
+          // Viewport is narrower than image — use horizontal FOV to derive vertical
+          const hFovRad = 2 * Math.atan(imgWidth / (2 * fPx));
+          finalFov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(hFovRad / 2) / viewAspect));
+        }
 
-      console.log('[Viewer] World bounding box:', {
-        center: [center.x.toFixed(3), center.y.toFixed(3), center.z.toFixed(3)],
-        size: [size.x.toFixed(3), size.y.toFixed(3), size.z.toFixed(3)],
-        radius: radius.toFixed(3)
-      });
+        this.camera.fov = THREE.MathUtils.clamp(finalFov, 10, 100);
+        this.camera.position.set(0, 0, 0);
+        this.camera.up.set(0, 1, 0);
+        this.camera.lookAt(0, 0, -1);
+        this.camera.near = 0.001;
+        this.camera.far = 1000;
+        this.camera.updateProjectionMatrix();
 
-      // Calculate distance using FOV to fill ~90% of viewport
-      const fovRad = THREE.MathUtils.degToRad(this.camera.fov);
-      const distance = (radius / Math.sin(fovRad / 2)) * 1.1; // 10% margin
+        this.controls.target.set(0, 0, -1);
+        this.controls.update();
 
-      // SHARP camera was at origin (0,0,0) looking straight along +Z.
-      // After 180° X rotation, scene is at -Z. To match the original photo
-      // viewpoint, camera must look straight along -Z (not at an angle).
-      // Keep camera on the Z axis only (x=0, y=0), not at model center's x/y.
-      this.camera.position.set(0, 0, center.z + distance);
-      this.camera.up.set(0, 1, 0);
-      this.camera.lookAt(0, 0, center.z);
+        console.log('[Viewer] Camera set from PLY intrinsics:', {
+          fPx, imgWidth, imgHeight, fov: this.camera.fov.toFixed(1)
+        });
+      } else {
+        // Fallback: use bounding box if no camera info
+        console.log('[Viewer] No camera info in PLY, using bounding box fallback');
+        const worldBox = localBox?.clone().applyMatrix4(this.splat.matrixWorld);
+        if (!worldBox) return;
 
-      // Set near/far based on model size (metric scale)
-      this.camera.near = Math.max(distance / 1000, 0.001);
-      this.camera.far = distance * 100;
-      this.camera.updateProjectionMatrix();
+        const center = worldBox.getCenter(new THREE.Vector3());
+        const size = worldBox.getSize(new THREE.Vector3());
+        const radius = size.length() / 2;
 
-      // Target on Z axis only, keeping frontal view
-      this.controls.target.set(0, 0, center.z);
-      this.controls.update();
+        const fovRad = THREE.MathUtils.degToRad(this.camera.fov);
+        const distance = (radius / Math.sin(fovRad / 2)) * 1.1;
 
-      console.log('[Viewer] Auto-framed:', {
-        distance: distance.toFixed(3),
-        near: this.camera.near.toFixed(4),
-        far: this.camera.far.toFixed(1)
-      });
+        this.camera.position.set(0, 0, center.z + distance);
+        this.camera.up.set(0, 1, 0);
+        this.camera.lookAt(0, 0, center.z);
+        this.camera.near = Math.max(distance / 1000, 0.001);
+        this.camera.far = distance * 100;
+        this.camera.updateProjectionMatrix();
+
+        this.controls.target.set(0, 0, center.z);
+        this.controls.update();
+      }
     } catch (e) {
       console.log('[Viewer] Auto-frame failed:', e.message);
-      this.camera.position.set(0, 0, 3);
-      this.camera.up.set(0, 1, 0);
-      this.camera.lookAt(0, 0, 0);
-      this.controls.target.set(0, 0, 0);
-      this.controls.update();
     }
   },
 
