@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.4.4';
+const APP_VERSION = '0.4.5';
 
 const App = {
   currentPage: 'welcome',
@@ -346,18 +346,21 @@ const JobManager = {
       const jobId = card.dataset.jobId;
       const job = this.get(jobId);
 
-      card.querySelector('[data-action]')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const action = e.currentTarget.dataset.action;
-        if (action === 'resume') {
-          this.resumeJob(jobId);
-        } else if (action === 'view') {
-          viewJob3D(jobId);
-        } else if (action === 'retry') {
-          this.retryJob(jobId);
-        } else if (action === 'delete') {
-          this.deleteJob(jobId);
-        }
+      // Attach click handlers to ALL action buttons (not just the first one)
+      card.querySelectorAll('[data-action]').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const action = e.currentTarget.dataset.action;
+          if (action === 'resume') {
+            this.resumeJob(jobId);
+          } else if (action === 'view') {
+            viewJob3D(jobId);
+          } else if (action === 'retry') {
+            this.retryJob(jobId);
+          } else if (action === 'delete') {
+            this.deleteJob(jobId);
+          }
+        });
       });
 
       card.addEventListener('click', () => {
@@ -1450,33 +1453,29 @@ function showConfirm(title, message) {
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Dynamically load the viewer.js ES module (Spark + Three.js, bundled locally).
- * Only loaded when the user actually opens the 3D viewer.
- * Shows loading progress and has a 15-second timeout.
+ * Wait for the viewer.js module to be loaded.
+ * viewer.js is loaded via <script type="module" async> in index.html.
+ * It sets window.SharpViewViewer when ready. We poll for it.
  */
 async function ensureViewerModule() {
   if (App.viewerModuleLoaded) return;
   if (App.viewerModuleLoading) return App.viewerModuleLoading;
 
   App.viewerModuleLoading = (async () => {
-    const timeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('加载超时')), 15000)
-    );
+    // Poll for window.SharpViewViewer to be available
+    // (set by the async module script in index.html)
+    const maxWait = 30000; // 30s timeout
+    const start = Date.now();
 
-    try {
-      // Race between dynamic import and timeout
-      const module = await Promise.race([
-        import('./viewer.js'),
-        timeout,
-      ]);
-      window.SharpViewViewer = module.default || module.SharpViewViewer || window.SharpViewViewer;
-      App.viewerModuleLoaded = true;
-      console.log('Viewer module loaded successfully');
-    } catch (e) {
-      App.viewerModuleLoading = null; // Allow retry
-      console.error('Failed to load viewer module:', e);
-      throw e;
+    while (!window.SharpViewViewer) {
+      if (Date.now() - start > maxWait) {
+        throw new Error('3D 渲染器加载超时 (30s)');
+      }
+      await new Promise(r => setTimeout(r, 100));
     }
+
+    App.viewerModuleLoaded = true;
+    console.log('[App] Viewer module ready (window.SharpViewViewer available)');
   })();
 
   return App.viewerModuleLoading;
