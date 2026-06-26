@@ -2,7 +2,7 @@
 
 > 将照片转化为 3D 高斯泼溅场景的 Android App
 
-**当前版本: v0.9.4**
+**当前版本: v0.9.5**
 
 SharpView 基于 Apple 开源的 [SHARP](https://github.com/apple/ml-sharp) 模型，通过 GitHub Actions 云端推理，将单张照片重建为 3D Gaussian Splatting 场景，并在手机端实时渲染查看。
 

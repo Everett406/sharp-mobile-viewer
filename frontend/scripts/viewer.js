@@ -54,18 +54,26 @@ const Viewer = {
   },
   gyro: {
     enabled: false,
-    raw: { beta: 0, gamma: 0 },
-    ref: { beta: null, gamma: null },   // Reference angle captured on enable
-    prev: { beta: 0, gamma: 0 },        // Previous accepted reading
-    smooth: { beta: 0, gamma: 0 },
-    target: { beta: 0, gamma: 0 },
-    maxInput: 30,     // Max delta from reference to use
-    maxTilt: 0.2,     // Max output tilt in radians (~11°)
-    deadzone: 1.5,    // Ignore delta < 1.5°
-    lerpFactor: 0.08, // Smoothing speed
-    outlierThreshold: 35, // Reject jumps > 35° between readings
-    refReady: false,  // Whether reference has been captured
-    handler: null,
+    // Quaternion-based: no gimbal lock, no Euler angle jumps
+    rawQuat: new THREE.Quaternion(),      // Current device quaternion
+    refQuat: new THREE.Quaternion(),      // Reference quaternion (captured on enable)
+    deltaQuat: new THREE.Quaternion(),    // ref⁻¹ * raw = relative rotation
+    refReady: false,
+    // Smoothing
+    smoothYaw: 0,
+    smoothPitch: 0,
+    targetYaw: 0,
+    targetPitch: 0,
+    // Settings
+    maxAngle: 0.35,    // Max look angle ~20° in each direction
+    lerpFactor: 0.12,  // Smoothing speed
+    deadzone: 0.02,    // Radians (~1.1°)
+    // Base look direction (where camera initially points)
+    baseTarget: new THREE.Vector3(0, 0, -1),
+    // State
+    nativeHandle: null,
+    webHandler: null,
+    motionHandler: null,
   },
   settings: {
     bgColor: '#2b2928',
@@ -549,51 +557,61 @@ const Viewer = {
 
     // Pre-allocated objects for gyroscope (avoid GC pressure)
     const gyroEuler = new THREE.Euler();
-    const gyroQuat = new THREE.Quaternion();
+    const tempQuat = new THREE.Quaternion();
+    const refInverse = new THREE.Quaternion();
+    const lookDir = new THREE.Vector3();
 
     const animate = () => {
       this.animationId = requestAnimationFrame(animate);
 
-      if (this.cameraMode === 'free' && this.controls) {
-        // Free move mode: custom controls handle everything
-        this.controls.update();
-      } else if (this.controls) {
-        // Orbit mode: update OrbitControls first (controls camera position/rotation)
+      if (this.controls) {
         this.controls.update();
       }
 
-      // Apply gyroscope parallax to pivot (after controls.update)
-      if (this.gyro.enabled && this.cameraPivot && this.gyro.refReady) {
+      // Apply gyroscope: modify OrbitControls target so camera looks around
+      // like a panorama viewer (limited range, no gimbal lock via quaternion)
+      if (this.gyro.enabled && this.gyro.refReady && this.controls) {
         const g = this.gyro;
 
-        // Compute delta from reference angle
-        let dBeta = g.raw.beta - g.ref.beta;
-        let dGamma = g.raw.gamma - g.ref.gamma;
+        // Compute relative quaternion: delta = ref⁻¹ * raw
+        refInverse.copy(g.refQuat).invert();
+        g.deltaQuat.copy(refInverse).multiply(g.rawQuat);
 
-        // Handle angle wraparound for gamma (can go ±180°)
-        if (dGamma > 180) dGamma -= 360;
-        if (dGamma < -180) dGamma += 360;
+        // Extract yaw (left/right) and pitch (up/down) from delta quaternion
+        // Convert quaternion to Euler YXZ order: yaw=Y, pitch=X
+        gyroEuler.setFromQuaternion(g.deltaQuat, 'YXZ');
+        let yaw = gyroEuler.y;   // left-right rotation
+        let pitch = gyroEuler.x; // up-down rotation
 
-        // Clamp delta to max input range
-        dBeta = THREE.MathUtils.clamp(dBeta, -g.maxInput, g.maxInput);
-        dGamma = THREE.MathUtils.clamp(dGamma, -g.maxInput, g.maxInput);
+        // Clamp to max look angle (limited panorama range ~20° each way)
+        yaw = THREE.MathUtils.clamp(yaw, -g.maxAngle, g.maxAngle);
+        pitch = THREE.MathUtils.clamp(pitch, -g.maxAngle, g.maxAngle);
 
-        // Apply deadzone
-        if (Math.abs(dBeta) < g.deadzone) dBeta = 0;
-        if (Math.abs(dGamma) < g.deadzone) dGamma = 0;
+        // Deadzone
+        if (Math.abs(yaw) < g.deadzone) yaw = 0;
+        if (Math.abs(pitch) < g.deadzone) pitch = 0;
 
-        // Map delta to target tilt
-        g.target.beta = (dBeta / g.maxInput) * g.maxTilt;
-        g.target.gamma = (dGamma / g.maxInput) * g.maxTilt;
+        g.targetYaw = yaw;
+        g.targetPitch = pitch;
 
-        // Smooth with lerp
-        g.smooth.beta += (g.target.beta - g.smooth.beta) * g.lerpFactor;
-        g.smooth.gamma += (g.target.gamma - g.smooth.gamma) * g.lerpFactor;
+        // Smooth toward target
+        g.smoothYaw += (g.targetYaw - g.smoothYaw) * g.lerpFactor;
+        g.smoothPitch += (g.targetPitch - g.smoothPitch) * g.lerpFactor;
 
-        // Apply to pivot: gamma → Z axis (left/right parallax), beta → X axis (up/down)
-        gyroEuler.set(g.smooth.beta, 0, g.smooth.gamma, 'YXZ');
-        gyroQuat.setFromEuler(gyroEuler);
-        this.cameraPivot.quaternion.copy(gyroQuat);
+        // Compute new look direction: rotate base target by yaw + pitch
+        // This moves the OrbitControls target on a sphere around the camera,
+        // making it look left/right/up/down like a panorama viewer.
+        lookDir.copy(g.baseTarget);
+        // Apply yaw (around Y axis) then pitch (around X axis)
+        tempQuat.setFromEuler(gyroEuler.set(g.smoothPitch, g.smoothYaw, 0, 'YXZ'));
+        lookDir.applyQuaternion(tempQuat);
+
+        // Set target = camera position + look direction * distance
+        // Use the original camera-to-target distance
+        const dist = this.camera.position.distanceTo(g.baseTarget);
+        this.controls.target.copy(this.camera.position).add(
+          lookDir.normalize().multiplyScalar(Math.max(dist, 0.5))
+        );
       }
 
       if (this.renderer && this.scene && this.camera) {
@@ -645,52 +663,42 @@ const Viewer = {
       return false;
     }
 
-    this.gyro.raw = { beta: 0, gamma: 0 };
-    this.gyro.ref = { beta: null, gamma: null };
+    // Reset state
     this.gyro.refReady = false;
-    this.gyro.prev = { beta: 0, gamma: 0 };
-    this.gyro.smooth = { beta: 0, gamma: 0 };
+    this.gyro.smoothYaw = 0;
+    this.gyro.smoothPitch = 0;
+    this.gyro.targetYaw = 0;
+    this.gyro.targetPitch = 0;
 
-    // Helper: process incoming sensor data with outlier rejection + reference capture
-    const processGyroData = (data) => {
-      if (data.beta == null || data.gamma == null) return;
-      let b = data.beta;
-      let g = data.gamma;
+    // Store current controls target as base
+    if (this.controls) {
+      this.gyro.baseTarget.copy(this.controls.target);
+      // Disable touch rotate while gyro is on (zoom/pan still work)
+      this.controls.enableRotate = false;
+    }
 
-      // Outlier rejection: reject if jump from previous accepted reading is too large
-      if (this.gyro.prev.beta !== 0 || this.gyro.prev.gamma !== 0) {
-        const db = Math.abs(b - this.gyro.prev.beta);
-        const dg = Math.abs(g - this.gyro.prev.gamma);
-        // Handle angle wraparound (e.g. 179° vs -179° = 2° difference)
-        const dbWrap = Math.min(db, 360 - db);
-        const dgWrap = Math.min(dg, 360 - dg);
-        if (dbWrap > this.gyro.outlierThreshold || dgWrap > this.gyro.outlierThreshold) {
-          return; // Reject this reading
-        }
-      }
-      this.gyro.prev.beta = b;
-      this.gyro.prev.gamma = g;
+    // Process quaternion data from sensor
+    const processQuat = (qx, qy, qz, qw) => {
+      const q = new THREE.Quaternion(qx, qy, qz, qw);
+      this.gyro.rawQuat.copy(q);
 
-      // Capture reference angle from first accepted reading
       if (!this.gyro.refReady) {
-        this.gyro.ref.beta = b;
-        this.gyro.ref.gamma = g;
+        this.gyro.refQuat.copy(q);
         this.gyro.refReady = true;
-        console.log('[Viewer] Gyro reference captured: β=' + b.toFixed(1) + '° γ=' + g.toFixed(1) + '°');
+        console.log('[Viewer] Gyro reference quaternion captured');
       }
-
-      this.gyro.raw.beta = b;
-      this.gyro.raw.gamma = g;
     };
 
-    // Strategy 1: Native Capacitor plugin (most reliable on Android)
+    // Strategy 1: Native Capacitor plugin
     const Gyroscope = getGyroPlugin();
     if (Gyroscope) {
       try {
         const result = await Gyroscope.start();
         if (result && result.started) {
           const handle = await Gyroscope.addListener("orientation", (data) => {
-            processGyroData(data);
+            if (data.qx != null) {
+              processQuat(data.qx, data.qy, data.qz, data.qw);
+            }
           });
           this.gyro.nativeHandle = handle;
           this.gyro.enabled = true;
@@ -710,7 +718,6 @@ const Viewer = {
   _disableGyro() {
     this.gyro.enabled = false;
     this.gyro.refReady = false;
-    this.gyro.ref = { beta: null, gamma: null };
     // Stop native plugin
     const Gyroscope = getGyroPlugin();
     if (Gyroscope) {
@@ -728,10 +735,12 @@ const Viewer = {
       window.removeEventListener("devicemotion", this.gyro.motionHandler);
       this.gyro.motionHandler = null;
     }
-    if (this.cameraPivot) {
-      this.cameraPivot.quaternion.set(0, 0, 0, 1);
+    // Restore controls
+    if (this.controls) {
+      this.controls.enableRotate = true;
+      // Reset target to base
+      this.controls.target.copy(this.gyro.baseTarget);
     }
-    this.gyro.smooth = { beta: 0, gamma: 0 };
     console.log("[Viewer] Gyroscope disabled");
   },
 
@@ -739,53 +748,33 @@ const Viewer = {
     let gotData = false;
 
     // DeviceOrientationEvent: gives absolute beta/gamma angles
+    // Convert to quaternion manually
     this.gyro.webHandler = (e) => {
-      if (e.beta !== null && e.beta !== undefined && e.gamma !== null && e.gamma !== undefined) {
-        // Process through the same pipeline (outlier rejection + reference capture)
-        let b = e.beta;
-        let g = e.gamma;
-        if (this.gyro.prev.beta !== 0 || this.gyro.prev.gamma !== 0) {
-          const dbWrap = Math.min(Math.abs(b - this.gyro.prev.beta), 360 - Math.abs(b - this.gyro.prev.beta));
-          const dgWrap = Math.min(Math.abs(g - this.gyro.prev.gamma), 360 - Math.abs(g - this.gyro.prev.gamma));
-          if (dbWrap > this.gyro.outlierThreshold || dgWrap > this.gyro.outlierThreshold) return;
-        }
-        this.gyro.prev.beta = b;
-        this.gyro.prev.gamma = g;
+      if (e.beta != null && e.gamma != null && e.alpha != null) {
+        // Convert Euler (alpha, beta, gamma) to quaternion
+        const alpha = THREE.MathUtils.degToRad(e.alpha);
+        const beta = THREE.MathUtils.degToRad(e.beta);
+        const gamma = THREE.MathUtils.degToRad(e.gamma);
+        // Web API uses ZXY order
+        const euler = new THREE.Euler(beta, alpha, gamma, 'YXZ');
+        const q = new THREE.Quaternion().setFromEuler(euler);
+        this.gyro.rawQuat.copy(q);
+        gotData = true;
+
         if (!this.gyro.refReady) {
-          this.gyro.ref.beta = b;
-          this.gyro.ref.gamma = g;
+          this.gyro.refQuat.copy(q);
           this.gyro.refReady = true;
         }
-        this.gyro.raw.beta = b;
-        this.gyro.raw.gamma = g;
-        gotData = true;
       }
     };
     window.addEventListener('deviceorientation', this.gyro.webHandler);
 
-    // DeviceMotionEvent: gives rotationRate (some Android devices only fire this)
-    this.gyro.motionHandler = (e) => {
-      if (e.rotationRate) {
-        if (e.rotationRate.beta) {
-          this.gyro.raw.beta += e.rotationRate.beta * 0.016;
-          this.gyro.raw.beta = THREE.MathUtils.clamp(this.gyro.raw.beta, -45, 45);
-          gotData = true;
-        }
-        if (e.rotationRate.gamma) {
-          this.gyro.raw.gamma += e.rotationRate.gamma * 0.016;
-          this.gyro.raw.gamma = THREE.MathUtils.clamp(this.gyro.raw.gamma, -45, 45);
-          gotData = true;
-        }
-      }
-    };
-    window.addEventListener('devicemotion', this.gyro.motionHandler);
-
     this.gyro.enabled = true;
-    console.log('[Viewer] Gyroscope enabled (deviceorientation + devicemotion)');
+    console.log('[Viewer] Gyroscope enabled (deviceorientation Web API)');
 
     setTimeout(() => {
       if (this.gyro.enabled && !gotData) {
-        console.log('[Viewer] WARNING: No sensor data after 2s - sensors may be disabled');
+        console.log('[Viewer] WARNING: No sensor data after 2s');
       }
     }, 2000);
 

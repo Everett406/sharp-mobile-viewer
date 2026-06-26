@@ -29,6 +29,9 @@ public class GyroscopePlugin extends Plugin implements SensorEventListener {
         // Try game rotation vector first (uses accelerometer + gyro, no magnetometer needed)
         rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
         if (rotationSensor == null) {
+            rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
+        }
+        if (rotationSensor == null) {
             // Fall back to accelerometer + magnetometer
             accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
             magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
@@ -46,7 +49,9 @@ public class GyroscopePlugin extends Plugin implements SensorEventListener {
             isListening = true;
             JSObject result = new JSObject();
             result.put("started", true);
-            result.put("method", "game_rotation_vector");
+            String method = (rotationSensor.getType() == Sensor.TYPE_GAME_ROTATION_VECTOR)
+                    ? "game_rotation_vector" : "rotation_vector";
+            result.put("method", method);
             call.resolve(result);
         } else if (accelerometer != null && magnetometer != null) {
             sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME);
@@ -74,45 +79,31 @@ public class GyroscopePlugin extends Plugin implements SensorEventListener {
         call.resolve();
     }
 
-    @PluginMethod
-    public void lockLandscape(PluginCall call) {
-        Activity activity = getActivity();
-        if (activity != null) {
-            activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
-        }
-        call.resolve();
-    }
-
-    @PluginMethod
-    public void lockPortrait(PluginCall call) {
-        Activity activity = getActivity();
-        if (activity != null) {
-            activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
-        }
-        call.resolve();
-    }
-
-    @PluginMethod
-    public void unlockOrientation(PluginCall call) {
-        Activity activity = getActivity();
-        if (activity != null) {
-            activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR);
-        }
-        call.resolve();
-    }
-
     @Override
     public void onSensorChanged(SensorEvent event) {
-        if (event.sensor.getType() == Sensor.TYPE_GAME_ROTATION_VECTOR) {
-            float[] rotationMatrix = new float[9];
+        if (event.sensor.getType() == Sensor.TYPE_GAME_ROTATION_VECTOR
+                || event.sensor.getType() == Sensor.TYPE_ROTATION_VECTOR) {
+            // Send quaternion directly — no Euler angle gimbal lock issues
+            float[] quaternion = new float[4];
             try {
-                SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values);
+                // event.values for rotation vector: [x, y, z, w] (or [x, y, z] if w is not available)
+                if (event.values.length >= 4) {
+                    System.arraycopy(event.values, 0, quaternion, 0, 4);
+                } else {
+                    // For older API levels where w is not included
+                    SensorManager.getQuaternionFromVector(quaternion, event.values);
+                }
             } catch (Exception e) {
                 return;
             }
-            float[] orientationValues = new float[3];
-            SensorManager.getOrientation(rotationMatrix, orientationValues);
-            sendOrientation(orientationValues);
+
+            JSObject data = new JSObject();
+            data.put("qx", (double) quaternion[0]);
+            data.put("qy", (double) quaternion[1]);
+            data.put("qz", (double) quaternion[2]);
+            data.put("qw", (double) quaternion[3]);
+            notifyListeners("orientation", data);
+
         } else if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
             gravityValues = event.values;
             tryComputeOrientation();
@@ -125,26 +116,23 @@ public class GyroscopePlugin extends Plugin implements SensorEventListener {
     private void tryComputeOrientation() {
         if (gravityValues != null && geomagneticValues != null) {
             float[] rotationMatrix = new float[9];
-            float[] orientationValues = new float[3];
             boolean success = SensorManager.getRotationMatrix(rotationMatrix, null, gravityValues, geomagneticValues);
             if (success) {
-                SensorManager.getOrientation(rotationMatrix, orientationValues);
-                sendOrientation(orientationValues);
+                float[] quaternion = new float[4];
+                // Convert rotation matrix to quaternion
+                quaternion[0] = (float) (0.5 * Math.sqrt(Math.max(0, 1 + rotationMatrix[0] - rotationMatrix[4] - rotationMatrix[8])) * Math.signum(rotationMatrix[7] - rotationMatrix[5]));
+                quaternion[1] = (float) (0.5 * Math.sqrt(Math.max(0, 1 - rotationMatrix[0] + rotationMatrix[4] - rotationMatrix[8])) * Math.signum(rotationMatrix[2] - rotationMatrix[6]));
+                quaternion[2] = (float) (0.5 * Math.sqrt(Math.max(0, 1 - rotationMatrix[0] - rotationMatrix[4] + rotationMatrix[8])) * Math.signum(rotationMatrix[3] - rotationMatrix[1]));
+                quaternion[3] = (float) (0.5 * Math.sqrt(Math.max(0, 1 + rotationMatrix[0] + rotationMatrix[4] + rotationMatrix[8])));
+
+                JSObject data = new JSObject();
+                data.put("qx", (double) quaternion[0]);
+                data.put("qy", (double) quaternion[1]);
+                data.put("qz", (double) quaternion[2]);
+                data.put("qw", (double) quaternion[3]);
+                notifyListeners("orientation", data);
             }
         }
-    }
-
-    private void sendOrientation(float[] orientationValues) {
-        float azimuth = (float) Math.toDegrees(orientationValues[0]);
-        float pitch = (float) Math.toDegrees(orientationValues[1]);
-        float roll = (float) Math.toDegrees(orientationValues[2]);
-
-        JSObject data = new JSObject();
-        data.put("alpha", (double) azimuth);
-        data.put("beta", (double) pitch);
-        data.put("gamma", (double) roll);
-
-        notifyListeners("orientation", data);
     }
 
     @Override

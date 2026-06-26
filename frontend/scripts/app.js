@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.9.4';
+const APP_VERSION = '0.9.5';
 
 const App = {
   currentPage: 'welcome',
@@ -864,15 +864,14 @@ function setupEventListeners() {
       if (enabled) {
         btn.style.background = 'rgba(201,100,66,0.4)';
         label.textContent = '陀螺仪 ON';
-        debugLog(`✅ 已开启`);
+        debugLog(`✅ 已开启 (${window.SharpViewViewer.gyro.method || 'web'})`);
         showToast('陀螺仪已开启');
 
         // Monitor data for 5 seconds
         let dataCount = 0;
         const mon = setInterval(() => {
-          if (window.SharpViewViewer.gyro) {
-            const r = window.SharpViewViewer.gyro.raw;
-            if (r && (r.beta !== 0 || r.gamma !== 0)) dataCount++;
+          if (window.SharpViewViewer.gyro && window.SharpViewViewer.gyro.refReady) {
+            dataCount++;
           }
         }, 500);
         setTimeout(() => {
@@ -882,9 +881,9 @@ function setupEventListeners() {
 
         // Live values
         window._gyroInt = setInterval(() => {
-          if (window.SharpViewViewer.gyro && window.SharpViewViewer.gyro.raw) {
-            const r = window.SharpViewViewer.gyro.raw;
-            debugLog(`β=${r.beta?.toFixed(1)}° γ=${r.gamma?.toFixed(1)}°`);
+          const g = window.SharpViewViewer.gyro;
+          if (g) {
+            debugLog(`yaw=${(g.smoothYaw*180/Math.PI).toFixed(1)}° pitch=${(g.smoothPitch*180/Math.PI).toFixed(1)}° ref=${g.refReady}`);
           }
         }, 1000);
       } else {
