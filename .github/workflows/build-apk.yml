@@ -74,33 +74,7 @@ jobs:
 
           # 5. Generate app icon from source image
           pip install Pillow --break-system-packages -q
-          python3 - << 'PYTHON'
-          from PIL import Image
-          import os
-
-          src = Image.open('assets/app-icon.jpg').convert('RGBA')
-          # Make a square 512x512 icon
-          src = src.resize((512, 512), Image.LANCZOS)
-
-          sizes = {
-              'mipmap-mdpi': 48,
-              'mipmap-hdpi': 72,
-              'mipmap-xhdpi': 96,
-              'mipmap-xxhdpi': 144,
-              'mipmap-xxxhdpi': 192,
-          }
-          for folder, size in sizes.items():
-              path = f'android/app/src/main/res/{folder}/ic_launcher.png'
-              os.makedirs(os.path.dirname(path), exist_ok=True)
-              src.resize((size, size), Image.LANCZOS).save(path)
-              # Round icon variant
-              src.resize((size, size), Image.LANCZOS).save(path.replace('ic_launcher', 'ic_launcher_round'))
-
-          # Foreground for adaptive icon (v26+)
-          for folder in ['mipmap-anydpi-v26']:
-              path = f'android/app/src/main/res/{folder}'
-              os.makedirs(path, exist_ok=True)
-          PYTHON
+          python3 scripts/gen_icons.py
 
           # 6. Update AndroidManifest to use custom icon
           sed -i 's/@mipmap\/ic_launcher/@mipmap\/ic_launcher/g' android/app/src/main/AndroidManifest.xml

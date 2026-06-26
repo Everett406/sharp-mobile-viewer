@@ -15,10 +15,15 @@
 import * as THREE from "three";
 import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { registerPlugin } from "@capacitor/core";
 
-// Register native Gyroscope plugin (provides sensor data + orientation lock)
-const Gyroscope = registerPlugin("Gyroscope");
+// Access native Gyroscope plugin via global Capacitor object (injected by native runtime).
+// Do NOT import from @capacitor/core — esbuild bundling breaks the bridge connection.
+function getGyroPlugin() {
+  if (typeof window !== 'undefined' && window.Capacitor && window.Capacitor.Plugins) {
+    return window.Capacitor.Plugins.Gyroscope || null;
+  }
+  return null;
+}
 
 const LOAD_TIMEOUT_MS = 30000;
 
@@ -616,21 +621,27 @@ const Viewer = {
     this.gyro.raw = { beta: 0, gamma: 0 };
 
     // Strategy 1: Native Capacitor plugin (most reliable on Android)
-    try {
-      const result = await Gyroscope.start();
-      if (result && result.started) {
-        this.gyro.nativeListener = await Gyroscope.addListener("orientation", (data) => {
-          if (data.beta != null) this.gyro.raw.beta = data.beta;
-          if (data.gamma != null) this.gyro.raw.gamma = data.gamma;
-        });
-        this.gyro.enabled = true;
-        this.gyro.method = result.method || "native";
-        console.log("[Viewer] Gyroscope enabled via native plugin:", result.method);
-        return true;
+    const Gyroscope = getGyroPlugin();
+    if (Gyroscope) {
+      try {
+        const result = await Gyroscope.start();
+        if (result && result.started) {
+          // Set up event listener using Capacitor's addListener
+          Gyroscope.addListener("orientation", (data) => {
+            if (data.beta != null) this.gyro.raw.beta = data.beta;
+            if (data.gamma != null) this.gyro.raw.gamma = data.gamma;
+          });
+          this.gyro.enabled = true;
+          this.gyro.method = result.method || "native";
+          console.log("[Viewer] Gyroscope enabled via native plugin:", result.method);
+          return true;
+        }
+        console.log("[Viewer] Native plugin started but no sensors:", result);
+      } catch (nativeErr) {
+        console.log("[Viewer] Native plugin error:", nativeErr.message || nativeErr);
       }
-      console.log("[Viewer] Native plugin started but no sensors:", result);
-    } catch (nativeErr) {
-      console.log("[Viewer] Native plugin unavailable:", nativeErr.message);
+    } else {
+      console.log("[Viewer] Native Gyroscope plugin not found, trying Web API");
     }
 
     // Strategy 2: Web API fallback
@@ -639,12 +650,11 @@ const Viewer = {
 
   _disableGyro() {
     this.gyro.enabled = false;
-    if (this.gyro.nativeListener) {
-      try { this.gyro.nativeListener.remove(); } catch (e) {}
-      this.gyro.nativeListener = null;
+    // Stop native plugin
+    const Gyroscope = getGyroPlugin();
+    if (Gyroscope) {
+      try { Gyroscope.stop(); } catch (e) {}
     }
-    // Also stop native sensor listening
-    try { Gyroscope.stop(); } catch (e) {}
     if (this.gyro.webHandler) {
       window.removeEventListener("deviceorientation", this.gyro.webHandler);
       this.gyro.webHandler = null;
@@ -709,6 +719,8 @@ const Viewer = {
    * Toggle landscape/portrait orientation using native plugin.
    */
   async toggleLandscape() {
+    const Gyroscope = getGyroPlugin();
+    if (!Gyroscope) return null;
     try {
       if (this._landscape) {
         await Gyroscope.lockPortrait();
@@ -727,10 +739,13 @@ const Viewer = {
 
   async resetOrientation() {
     if (this._landscape) {
-      try {
-        await Gyroscope.lockPortrait();
-        this._landscape = false;
-      } catch (e) {}
+      const Gyroscope = getGyroPlugin();
+      if (Gyroscope) {
+        try {
+          await Gyroscope.lockPortrait();
+          this._landscape = false;
+        } catch (e) {}
+      }
     }
   },
 
