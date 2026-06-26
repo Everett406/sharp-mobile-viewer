@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.9.0';
+const APP_VERSION = '0.9.1';
 
 const App = {
   currentPage: 'welcome',
@@ -810,7 +810,6 @@ function setupEventListeners() {
   });
 
   // ── Gyroscope toggle ──
-  // Use both addEventListener AND a global function for reliability
   window.toggleGyro = async function() {
     const debugEl = document.getElementById('gyro-debug');
     const btn = document.getElementById('viewer-gyro');
@@ -827,7 +826,7 @@ function setupEventListeners() {
     };
 
     if (!debugEl || !btn) {
-      alert('错误: 找不到陀螺仪按钮或调试元素');
+      alert('错误: 找不到陀螺仪按钮');
       return;
     }
 
@@ -837,81 +836,99 @@ function setupEventListeners() {
       return;
     }
 
-    if (!window.SharpViewViewer.gyro) {
-      showToast('陀螺仪模块不存在');
-      debugLog('错误: gyro 对象不存在');
+    // Diagnostic: show what properties SharpViewViewer has
+    const keys = Object.keys(window.SharpViewViewer);
+    const hasGyro = 'gyro' in window.SharpViewViewer;
+    const gyroVal = typeof window.SharpViewViewer.gyro;
+    const hasToggle = typeof window.SharpViewViewer.toggleGyro;
+
+    debugEl.textContent = '';
+    debugLog('=== 陀螺仪诊断 ===');
+    debugLog(`SharpViewViewer keys: ${keys.join(',').substring(0, 120)}`);
+    debugLog(`has gyro: ${hasGyro}, type: ${gyroVal}`);
+    debugLog(`toggleGyro type: ${hasToggle}`);
+    debugLog(`Capacitor: ${typeof window.Capacitor}`);
+
+    // Just call toggleGyro directly, don't check .gyro property
+    if (typeof window.SharpViewViewer.toggleGyro !== 'function') {
+      debugLog('错误: toggleGyro 不是函数');
+      showToast('陀螺仪方法不存在');
       return;
     }
 
-    if (!window.SharpViewViewer.gyro.enabled) {
-      debugEl.textContent = '';
+    // Check if already enabled by calling the method
+    // toggleGyro returns true=enabled, false=disabled
+    try {
       showToast('正在开启陀螺仪...');
-      debugLog('=== 开始 ===');
-      debugLog(`Capacitor: ${typeof window.Capacitor}`);
-      if (window.Capacitor) {
-        debugLog(`Plugins: ${Object.keys(window.Capacitor.Plugins || {}).join(',') || '(空)'}`);
-      }
+      const enabled = await window.SharpViewViewer.toggleGyro();
+      if (enabled) {
+        btn.style.background = 'rgba(201,100,66,0.4)';
+        label.textContent = '陀螺仪 ON';
+        debugLog(`✅ 已开启`);
+        showToast('陀螺仪已开启');
 
-      try {
-        const enabled = await window.SharpViewViewer.toggleGyro();
-        if (enabled) {
-          btn.style.background = 'rgba(201,100,66,0.4)';
-          label.textContent = '陀螺仪 ON';
-          debugLog(`✅ 已开启 (${window.SharpViewViewer.gyro.method || 'web'})`);
-          showToast('陀螺仪已开启');
-
-          let dataCount = 0;
-          const mon = setInterval(() => {
+        // Monitor data for 5 seconds
+        let dataCount = 0;
+        const mon = setInterval(() => {
+          if (window.SharpViewViewer.gyro) {
             const r = window.SharpViewViewer.gyro.raw;
-            if (r.beta !== 0 || r.gamma !== 0) dataCount++;
-          }, 500);
-          setTimeout(() => {
-            clearInterval(mon);
-            debugLog(dataCount === 0 ? '⚠️ 5秒无数据' : `✅ 收到${dataCount}次数据`);
-          }, 5000);
+            if (r && (r.beta !== 0 || r.gamma !== 0)) dataCount++;
+          }
+        }, 500);
+        setTimeout(() => {
+          clearInterval(mon);
+          debugLog(dataCount === 0 ? '⚠️ 5秒无数据' : `✅ 收到${dataCount}次数据`);
+        }, 5000);
 
-          window._gyroInt = setInterval(() => {
+        // Live values
+        window._gyroInt = setInterval(() => {
+          if (window.SharpViewViewer.gyro && window.SharpViewViewer.gyro.raw) {
             const r = window.SharpViewViewer.gyro.raw;
             debugLog(`β=${r.beta?.toFixed(1)}° γ=${r.gamma?.toFixed(1)}°`);
-          }, 1000);
-        } else {
-          debugLog('❌ 开启失败');
-          showToast('陀螺仪开启失败');
-        }
-      } catch (e) {
-        debugLog('❌ 异常: ' + e.message);
-        showToast('陀螺仪异常: ' + e.message);
+          }
+        }, 1000);
+      } else {
+        // Disabled
+        btn.style.background = 'rgba(255,255,255,0.15)';
+        label.textContent = '陀螺仪';
+        if (window._gyroInt) { clearInterval(window._gyroInt); window._gyroInt = null; }
+        setTimeout(() => { if (debugEl) debugEl.style.display = 'none'; }, 3000);
+        showToast('陀螺仪已关闭');
       }
-    } else {
-      await window.SharpViewViewer.toggleGyro();
-      btn.style.background = 'rgba(255,255,255,0.15)';
-      label.textContent = '陀螺仪';
-      if (window._gyroInt) { clearInterval(window._gyroInt); window._gyroInt = null; }
-      setTimeout(() => { if (debugEl) debugEl.style.display = 'none'; }, 3000);
-      showToast('陀螺仪已关闭');
+    } catch (e) {
+      debugLog('❌ 异常: ' + (e.message || e));
+      showToast('陀螺仪异常');
     }
   };
 
-  // Attach via addEventListener as well
   document.getElementById('viewer-gyro')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     window.toggleGyro();
   });
 
-  // ── Camera mode toggle (orbit vs free) ──
+  // ── Camera mode toggle ──
   window.toggleCameraMode = function() {
     if (!window.SharpViewViewer) { showToast('渲染器未加载'); return; }
-    const mode = window.SharpViewViewer.toggleCameraMode();
-    const btn = document.getElementById('viewer-mode');
-    if (btn) {
-      btn.textContent = mode === 'free' ? '自由' : '轨道';
-      btn.style.background = mode === 'free' ? 'rgba(201,100,66,0.4)' : 'rgba(255,255,255,0.15)';
+    if (typeof window.SharpViewViewer.toggleCameraMode !== 'function') {
+      showToast('相机模式方法不存在');
+      return;
     }
-    showToast(mode === 'free' ? '自由移动模式' : '轨道模式');
+    try {
+      const mode = window.SharpViewViewer.toggleCameraMode();
+      const btn = document.getElementById('viewer-mode');
+      if (btn) {
+        btn.textContent = mode === 'free' ? '自由' : '轨道';
+        btn.style.background = mode === 'free' ? 'rgba(201,100,66,0.4)' : 'rgba(255,255,255,0.15)';
+      }
+      showToast(mode === 'free' ? '自由移动模式' : '轨道模式');
+    } catch (e) {
+      showToast('切换失败: ' + (e.message || e));
+    }
   };
   document.getElementById('viewer-mode')?.addEventListener('click', (e) => {
     e.preventDefault();
+    e.stopPropagation();
     window.toggleCameraMode();
   });
 
