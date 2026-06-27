@@ -512,7 +512,7 @@ const Viewer = {
         'in float vRevealDist;\nuniform float uRevealRadius1;\nuniform float uRevealRadius2;\nuniform float uRevealActive;\nuniform float uRevealFade;\nvoid main() {'
       );
       // Insert reveal logic before minAlpha discard
-      // Narrow glow width (0.05 = ~5% of maxDist)
+      // z2 and adjustedStdDev are already computed above in the shader
       fs = fs.replace(
         'if (rgba.a < minAlpha) {',
         'if (uRevealActive > 0.5) {\n' +
@@ -520,37 +520,45 @@ const Viewer = {
         '            float r1 = uRevealRadius1;\n' +
         '            float r2 = uRevealRadius2;\n' +
         '            float gw = 0.05;\n' +
-        '            // Beyond both radii + glow: hidden\n' +
-        '            if (d > max(r1, r2) + gw) {\n' +
-        '                discard;\n' +
-        '            }\n' +
-        '            // Pass 1: point cloud scan (grayscale)\n' +
+        '            float fullSplat = adjustedStdDev * adjustedStdDev;\n' +
+        '            float pointSize = 0.12; // Show only center 12% → looks like a hard point\n' +
+        '            float pointSplat = pointSize * pointSize * fullSplat;\n' +
+        '\n' +
+        '            // Beyond radius1 + glow: completely hidden\n' +
         '            if (d > r1 + gw) {\n' +
         '                discard;\n' +
         '            }\n' +
-        '            if (d <= r1 && d > r2) {\n' +
-        '                // Inside radius1 but outside radius2: grayscale point cloud\n' +
+        '\n' +
+        '            // Pass 1 region: inside r1, outside r2+gw → point cloud (small hard dots)\n' +
+        '            if (d <= r1 && d > r2 + gw) {\n' +
+        '                if (z2 > pointSplat) { discard; }\n' +
         '                float gray = dot(rgba.rgb, vec3(0.3, 0.59, 0.11));\n' +
-        '                rgba.rgb = vec3(gray) * 1.15;\n' +
+        '                rgba.rgb = vec3(gray) * 1.4;\n' +
+        '                rgba.a = 1.0;\n' +
         '            }\n' +
-        '            // Glow edge for pass 1 (cyan, narrow)\n' +
+        '\n' +
+        '            // Glow edge pass 1 (cyan, narrow) — point cloud style dots\n' +
         '            if (d > r1 && d <= r1 + gw) {\n' +
         '                float g1 = 1.0 - (d - r1) / gw;\n' +
+        '                if (z2 > pointSplat) { discard; }\n' +
         '                float gray = dot(rgba.rgb, vec3(0.3, 0.59, 0.11));\n' +
-        '                rgba.rgb = mix(vec3(gray) * 1.15, rgba.rgb, 0.0);\n' +
-        '                rgba.rgb += vec3(0.2, 0.6, 0.9) * g1;\n' +
-        '                rgba.a *= g1 * uRevealFade;\n' +
+        '                rgba.rgb = vec3(gray) * 1.4 + vec3(0.2, 0.6, 0.9) * g1;\n' +
+        '                rgba.a = g1 * uRevealFade;\n' +
         '            }\n' +
-        '            // Glow edge for pass 2 (orange, narrow)\n' +
-        '            if (d > r2 && d <= r2 + gw && d <= r1) {\n' +
+        '\n' +
+        '            // Glow edge pass 2 (orange) — transition point cloud → full splat\n' +
+        '            if (d > r2 && d <= r2 + gw) {\n' +
         '                float g2 = 1.0 - (d - r2) / gw;\n' +
+        '                // Expand from small point to full splat at the color edge\n' +
+        '                float expandSize = mix(pointSize, 1.0, g2);\n' +
+        '                if (z2 > expandSize * expandSize * fullSplat) { discard; }\n' +
         '                float gray = dot(rgba.rgb, vec3(0.3, 0.59, 0.11));\n' +
-        '                rgba.rgb = mix(vec3(gray) * 1.15, rgba.rgb, g2);\n' +
+        '                rgba.rgb = mix(vec3(gray) * 1.4, rgba.rgb, g2);\n' +
         '                rgba.rgb += vec3(0.9, 0.5, 0.15) * g2 * 0.7;\n' +
-        '                rgba.a *= mix(g2, 1.0, g2) * uRevealFade;\n' +
+        '                rgba.a = mix(g2, 1.0, g2);\n' +
         '            }\n' +
-        '            // Apply fade-out multiplier\n' +
-        '            rgba.a *= uRevealFade;\n' +
+        '\n' +
+        '            // Inside r2: full normal splat, NO modification (let shader handle normally)\n' +
         '        }\n' +
         '        if (rgba.a < minAlpha) {'
       );
