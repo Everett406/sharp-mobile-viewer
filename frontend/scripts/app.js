@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.12.3';
+const APP_VERSION = '0.13.0';
 
 const App = {
   currentPage: 'welcome',
@@ -962,6 +962,176 @@ function setupEventListeners() {
     if (window.SharpViewViewer) {
       window.SharpViewViewer.updateGyroSettings({ invert: on });
     }
+  });
+
+  // ── Cinematic mode (keyframe video) ──
+  let _cinematicActive = false;
+  let _selectedKfIndex = -1;
+
+  function renderKeyframeList() {
+    const container = document.getElementById('cinematic-keyframes');
+    const emptyHint = document.getElementById('cinematic-empty-hint');
+    const previewBtn = document.getElementById('cinematic-preview');
+    const exportBtn = document.getElementById('cinematic-export');
+    if (!container) return;
+
+    const kfs = window.SharpViewViewer?.cinematic?.keyframes || [];
+    // Remove old chips (keep empty hint)
+    container.querySelectorAll('.kf-chip').forEach(el => el.remove());
+
+    if (kfs.length === 0) {
+      emptyHint.style.display = 'block';
+      previewBtn.style.display = 'none';
+      exportBtn.style.display = 'none';
+      return;
+    }
+    emptyHint.style.display = 'none';
+    previewBtn.style.display = kfs.length >= 2 ? 'inline-flex' : 'none';
+    exportBtn.style.display = kfs.length >= 2 ? 'inline-flex' : 'none';
+
+    kfs.forEach((kf, i) => {
+      const chip = document.createElement('div');
+      chip.className = 'kf-chip' + (i === _selectedKfIndex ? ' active' : '');
+      chip.innerHTML = `
+        <span class="kf-chip-num">${i + 1}</span>
+        <button class="kf-chip-del" title="删除">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>`;
+      // Click chip → jump to keyframe
+      chip.addEventListener('click', (e) => {
+        if (e.target.closest('.kf-chip-del')) return;
+        _selectedKfIndex = i;
+        window.SharpViewViewer?.goToKeyframe(i);
+        renderKeyframeList();
+      });
+      // Delete button
+      chip.querySelector('.kf-chip-del').addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.SharpViewViewer?.removeKeyframe(i);
+        if (_selectedKfIndex >= i) _selectedKfIndex = Math.max(-1, _selectedKfIndex - 1);
+        renderKeyframeList();
+      });
+      container.appendChild(chip);
+    });
+  }
+
+  function enterCinematic() {
+    if (!window.SharpViewViewer) return;
+    _cinematicActive = true;
+    _selectedKfIndex = -1;
+    window.SharpViewViewer.enterCinematicMode();
+    document.getElementById('cinematic-panel').style.display = 'block';
+    document.getElementById('cinematic-overlay').style.display = 'block';
+    // Hide normal viewer controls
+    document.querySelector('#page-viewer > div:last-child')?.style.setProperty('display', 'none');
+    renderKeyframeList();
+    // Re-init lucide icons for new elements
+    if (window.lucide) lucide.createIcons();
+  }
+
+  function exitCinematic() {
+    _cinematicActive = false;
+    window.SharpViewViewer?.exitCinematicMode();
+    document.getElementById('cinematic-panel').style.display = 'none';
+    document.getElementById('cinematic-overlay').style.display = 'none';
+    document.getElementById('cinematic-recording').style.display = 'none';
+    document.getElementById('cinematic-progress-container').style.display = 'none';
+    // Restore normal viewer controls
+    document.querySelector('#page-viewer > div:last-child')?.style.setProperty('display', '');
+  }
+
+  document.getElementById('viewer-cinematic')?.addEventListener('click', () => {
+    if (!window.SharpViewViewer?.splat) {
+      showToast('请先加载模型');
+      return;
+    }
+    enterCinematic();
+  });
+  document.getElementById('cinematic-back')?.addEventListener('click', exitCinematic);
+
+  document.getElementById('cinematic-aspect')?.addEventListener('change', (e) => {
+    window.SharpViewViewer?.setAspectRatio(e.target.value);
+  });
+
+  document.getElementById('cinematic-add-kf')?.addEventListener('click', () => {
+    const idx = window.SharpViewViewer?.addKeyframe();
+    if (idx >= 0) {
+      _selectedKfIndex = idx;
+      renderKeyframeList();
+      showToast(`关键帧 ${idx + 1} 已添加`);
+    }
+  });
+
+  document.getElementById('cinematic-preview')?.addEventListener('click', () => {
+    if (!window.SharpViewViewer) return;
+    const btn = document.getElementById('cinematic-preview');
+    const progressBar = document.getElementById('cinematic-progress-bar');
+    const progressContainer = document.getElementById('cinematic-progress-container');
+    progressContainer.style.display = 'block';
+    btn.style.display = 'none';
+    window.SharpViewViewer.previewAnimation(
+      (t) => { progressBar.style.width = `${t * 100}%`; },
+      () => {
+        progressContainer.style.display = 'none';
+        btn.style.display = 'inline-flex';
+        showToast('预览完成');
+      }
+    );
+  });
+
+  document.getElementById('cinematic-export')?.addEventListener('click', async () => {
+    if (!window.SharpViewViewer) return;
+    const btn = document.getElementById('cinematic-export');
+    const previewBtn = document.getElementById('cinematic-preview');
+    const addBtn = document.getElementById('cinematic-add-kf');
+    const progressBar = document.getElementById('cinematic-progress-bar');
+    const progressContainer = document.getElementById('cinematic-progress-container');
+    const recIndicator = document.getElementById('cinematic-recording');
+    const recTime = document.getElementById('cinematic-rec-time');
+
+    btn.disabled = true;
+    previewBtn.style.display = 'none';
+    addBtn.style.display = 'none';
+    progressContainer.style.display = 'block';
+    recIndicator.style.display = 'flex';
+
+    const totalDuration = window.SharpViewViewer.getTotalDuration();
+    const exportStart = performance.now();
+
+    await window.SharpViewViewer.exportVideo(
+      (t) => {
+        progressBar.style.width = `${t * 100}%`;
+        recTime.textContent = `${((performance.now() - exportStart) / 1000).toFixed(1)}s / ${totalDuration.toFixed(1)}s`;
+      },
+      (blob, ext) => {
+        // Download the video
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `sharpview_${Date.now()}.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        btn.disabled = false;
+        btn.style.display = 'inline-flex';
+        previewBtn.style.display = 'inline-flex';
+        addBtn.style.display = 'inline-flex';
+        progressContainer.style.display = 'none';
+        recIndicator.style.display = 'none';
+        showToast(`视频已导出 (${(blob.size / 1024 / 1024).toFixed(1)} MB)`);
+      },
+      (errMsg) => {
+        btn.disabled = false;
+        btn.style.display = 'inline-flex';
+        previewBtn.style.display = 'inline-flex';
+        addBtn.style.display = 'inline-flex';
+        progressContainer.style.display = 'none';
+        recIndicator.style.display = 'none';
+        showToast(errMsg || '导出失败');
+      }
+    );
   });
 
   // ── Error page ──

@@ -239,3 +239,42 @@
   50% { transform: scale(1.1); }
 }
 .stepper-pulse { animation: stepper-pulse 2s ease infinite; }
+
+/* Cinematic recording pulse */
+@keyframes pulse-rec {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* Cinematic keyframe chip */
+.kf-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.2);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.kf-chip.active {
+  background: var(--brand-500);
+  border-color: var(--brand-500);
+}
+.kf-chip-num {
+  font: 600 12px var(--font-mono);
+  color: #fff;
+}
+.kf-chip-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.15);
+  border: none;
+  cursor: pointer;
+}

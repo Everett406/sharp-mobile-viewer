@@ -47,6 +47,27 @@ const Viewer = {
   _landscape: false,
   cameraInfo: null,
   cameraMode: 'orbit', // 'orbit' or 'free'
+  // ── Cinematic (keyframe video) mode ──
+  cinematic: {
+    active: false,
+    aspectRatio: '16:9',
+    keyframes: [],       // [{position: [x,y,z], target: [x,y,z], fov: float, duration: float}]
+    previewing: false,
+    recording: false,
+    _savedAspect: null,
+    _savedFov: null,
+    _animStartTime: 0,
+    _mediaRecorder: null,
+    _recordChunks: [],
+  },
+  // Aspect ratio presets: ratio string → {w, h} and export resolution
+  ASPECT_PRESETS: {
+    '16:9':  { w: 16, h: 9,  exportW: 1920, exportH: 1080 },
+    '9:16':  { w: 9,  h: 16, exportW: 1080, exportH: 1920 },
+    '1:1':   { w: 1,  h: 1,  exportW: 1080, exportH: 1080 },
+    '4:3':   { w: 4,  h: 3,  exportW: 1440, exportH: 1080 },
+    '21:9':  { w: 21, h: 9,  exportW: 2520, exportH: 1080 },
+  },
   freeMove: {
     velocity: new THREE.Vector3(),
     targetVelocity: new THREE.Vector3(),
@@ -193,9 +214,16 @@ const Viewer = {
           const rw = entry.contentRect.width;
           const rh = entry.contentRect.height;
           if (rw < 10 || rh < 10) return;
-          this.camera.aspect = rw / rh;
-          this.camera.updateProjectionMatrix();
+          // In cinematic mode, camera aspect is controlled by frame ratio
+          if (!this.cinematic.active) {
+            this.camera.aspect = rw / rh;
+            this.camera.updateProjectionMatrix();
+          }
           this.renderer.setSize(rw, rh, false);
+          // Update cinematic frame overlay if active
+          if (this.cinematic.active) {
+            this._applyCinematicAspect();
+          }
         }
       });
       this.resizeObserver.observe(this.container);
@@ -1289,6 +1317,441 @@ const Viewer = {
       this.canvas.removeEventListener('wheel', this._freeWheel);
       this._freeWheel = null;
     }
+  },
+
+  // ═══════════════════════════════════════════════════════════
+  // Cinematic Mode: Keyframe Animation + Video Export
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * Enter cinematic mode: show frame overlay, lock camera aspect.
+   */
+  enterCinematicMode() {
+    if (this.cinematic.active || !this.camera) return;
+    this.cinematic.active = true;
+    // Save original camera settings
+    this.cinematic._savedAspect = this.camera.aspect;
+    this.cinematic._savedFov = this.camera.fov;
+    this._applyCinematicAspect();
+    console.log('[Viewer] Cinematic mode entered, aspect:', this.cinematic.aspectRatio);
+  },
+
+  /**
+   * Exit cinematic mode: restore camera, hide overlay.
+   */
+  exitCinematicMode() {
+    if (!this.cinematic.active) return;
+    this.stopPreview();
+    this.cinematic.active = false;
+    // Restore camera
+    if (this.camera && this.cinematic._savedAspect != null) {
+      this.camera.aspect = this.cinematic._savedAspect;
+      this.camera.fov = this.cinematic._savedFov;
+      this.camera.updateProjectionMatrix();
+    }
+    // Restore canvas size if it was changed for export
+    if (this._savedCanvasSize) {
+      const { w, h } = this._savedCanvasSize;
+      this.renderer.setSize(w, h, false);
+      this._savedCanvasSize = null;
+    }
+    console.log('[Viewer] Cinematic mode exited');
+  },
+
+  /**
+   * Set aspect ratio and update camera + frame overlay.
+   */
+  setAspectRatio(ratio) {
+    if (!this.ASPECT_PRESETS[ratio]) return;
+    this.cinematic.aspectRatio = ratio;
+    if (this.cinematic.active) {
+      this._applyCinematicAspect();
+    }
+  },
+
+  _applyCinematicAspect() {
+    const preset = this.ASPECT_PRESETS[this.cinematic.aspectRatio];
+    if (!preset || !this.camera || !this.container) return;
+    const containerW = this.container.clientWidth;
+    const containerH = this.container.clientHeight;
+    const containerAspect = containerW / containerH;
+    const targetAspect = preset.w / preset.h;
+
+    // Camera aspect matches the frame ratio for WYSIWYG
+    this.camera.aspect = targetAspect;
+    this.camera.updateProjectionMatrix();
+
+    // Update frame overlay CSS
+    const frame = document.getElementById('cinematic-frame');
+    if (frame) {
+      let frameW, frameH;
+      if (targetAspect > containerAspect) {
+        // Frame is wider than container → fit to width
+        frameW = containerW;
+        frameH = containerW / targetAspect;
+      } else {
+        // Frame is taller → fit to height
+        frameH = containerH;
+        frameW = containerH * targetAspect;
+      }
+      frame.style.width = `${frameW}px`;
+      frame.style.height = `${frameH}px`;
+      frame.style.left = `${(containerW - frameW) / 2}px`;
+      frame.style.top = `${(containerH - frameH) / 2}px`;
+    }
+  },
+
+  /**
+   * Add current camera state as a new keyframe.
+   * Returns the index of the new keyframe.
+   */
+  addKeyframe() {
+    if (!this.camera || !this.controls) return -1;
+    const kf = {
+      position: this.camera.position.toArray(),
+      target: this.controls.target.toArray(),
+      fov: this.camera.fov,
+      duration: 3.0,  // seconds to reach this keyframe from previous
+    };
+    this.cinematic.keyframes.push(kf);
+    console.log('[Viewer] Keyframe added:', this.cinematic.keyframes.length, kf);
+    return this.cinematic.keyframes.length - 1;
+  },
+
+  /**
+   * Remove keyframe by index.
+   */
+  removeKeyframe(index) {
+    if (index < 0 || index >= this.cinematic.keyframes.length) return;
+    this.cinematic.keyframes.splice(index, 1);
+    console.log('[Viewer] Keyframe removed:', index, 'remaining:', this.cinematic.keyframes.length);
+  },
+
+  /**
+   * Jump to a keyframe (instant, no animation).
+   */
+  goToKeyframe(index) {
+    if (index < 0 || index >= this.cinematic.keyframes.length) return;
+    const kf = this.cinematic.keyframes[index];
+    this.camera.position.fromArray(kf.position);
+    this.controls.target.fromArray(kf.target);
+    this.camera.fov = kf.fov;
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+    console.log('[Viewer] Jumped to keyframe:', index);
+  },
+
+  /**
+   * Update keyframe duration.
+   */
+  updateKeyframeDuration(index, duration) {
+    if (index < 0 || index >= this.cinematic.keyframes.length) return;
+    this.cinematic.keyframes[index].duration = duration;
+  },
+
+  /**
+   * Update current keyframe to match current camera position (re-capture).
+   */
+  updateKeyframe(index) {
+    if (index < 0 || index >= this.cinematic.keyframes.length) return;
+    const kf = this.cinematic.keyframes[index];
+    kf.position = this.camera.position.toArray();
+    kf.target = this.controls.target.toArray();
+    kf.fov = this.camera.fov;
+    console.log('[Viewer] Keyframe updated:', index);
+  },
+
+  /**
+   * Catmull-Rom interpolation for smooth curves through keyframes.
+   * Returns interpolated point given 4 control points and t∈[0,1].
+   */
+  _catmullRom(p0, p1, p2, p3, t) {
+    const t2 = t * t;
+    const t3 = t2 * t;
+    return {
+      x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+      y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3),
+      z: 0.5 * ((2 * p1.z) + (-p0.z + p2.z) * t + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2 + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3),
+    };
+  },
+
+  /**
+   * Ease in-out cubic for smooth acceleration/deceleration.
+   */
+  _easeInOutCubic(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  },
+
+  /**
+   * Get interpolated camera state at time t (seconds from start).
+   * Returns {position, target, fov} or null if beyond end.
+   */
+  _getInterpolatedState(elapsed) {
+    const kfs = this.cinematic.keyframes;
+    if (kfs.length < 2) return null;
+
+    // Find which segment we're in
+    let accumTime = 0;
+    for (let i = 1; i < kfs.length; i++) {
+      const segDuration = kfs[i].duration || 3.0;
+      if (elapsed < accumTime + segDuration) {
+        // We're in segment i-1 → i
+        const localT = (elapsed - accumTime) / segDuration;
+        const easedT = this._easeInOutCubic(Math.max(0, Math.min(1, localT)));
+
+        // Get control points for Catmull-Rom
+        const pPrev = kfs[Math.max(0, i - 2)].position;
+        const pFrom = kfs[i - 1].position;
+        const pTo = kfs[i].position;
+        const pNext = kfs[Math.min(kfs.length - 1, i + 1)].position;
+
+        const tPrev = kfs[Math.max(0, i - 2)].target;
+        const tFrom = kfs[i - 1].target;
+        const tTo = kfs[i].target;
+        const tNext = kfs[Math.min(kfs.length - 1, i + 1)].target;
+
+        const pos = this._catmullRom(
+          { x: pPrev[0], y: pPrev[1], z: pPrev[2] },
+          { x: pFrom[0], y: pFrom[1], z: pFrom[2] },
+          { x: pTo[0], y: pTo[1], z: pTo[2] },
+          { x: pNext[0], y: pNext[1], z: pNext[2] },
+          easedT
+        );
+        const tgt = this._catmullRom(
+          { x: tPrev[0], y: tPrev[1], z: tPrev[2] },
+          { x: tFrom[0], y: tFrom[1], z: tFrom[2] },
+          { x: tTo[0], y: tTo[1], z: tTo[2] },
+          { x: tNext[0], y: tNext[1], z: tNext[2] },
+          easedT
+        );
+
+        const fov = kfs[i - 1].fov + (kfs[i].fov - kfs[i - 1].fov) * easedT;
+
+        return { position: pos, target: tgt, fov };
+      }
+      accumTime += segDuration;
+    }
+    // Past end → return last keyframe
+    const last = kfs[kfs.length - 1];
+    return {
+      position: { x: last.position[0], y: last.position[1], z: last.position[2] },
+      target: { x: last.target[0], y: last.target[1], z: last.target[2] },
+      fov: last.fov,
+    };
+  },
+
+  /**
+   * Get total animation duration.
+   */
+  getTotalDuration() {
+    return this.cinematic.keyframes.slice(1).reduce((sum, kf) => sum + (kf.duration || 3.0), 0);
+  },
+
+  /**
+   * Preview keyframe animation (no recording).
+   * Calls onProgress(t) and onComplete().
+   */
+  previewAnimation(onProgress, onComplete) {
+    const kfs = this.cinematic.keyframes;
+    if (kfs.length < 2) {
+      console.log('[Viewer] Need at least 2 keyframes to preview');
+      if (onComplete) onComplete();
+      return;
+    }
+    this.cinematic.previewing = true;
+    // Disable controls during preview
+    if (this.controls) this.controls.enabled = false;
+
+    const totalDuration = this.getTotalDuration();
+    const startTime = performance.now();
+
+    console.log('[Viewer] Preview animation started, duration:', totalDuration, 's');
+
+    const animate = () => {
+      if (!this.cinematic.previewing) {
+        if (onComplete) onComplete();
+        return;
+      }
+      const elapsed = (performance.now() - startTime) / 1000;
+      const state = this._getInterpolatedState(elapsed);
+
+      if (state && elapsed < totalDuration) {
+        this.camera.position.set(state.position.x, state.position.y, state.position.z);
+        this.controls.target.set(state.target.x, state.target.y, state.target.z);
+        this.camera.fov = state.fov;
+        this.camera.updateProjectionMatrix();
+        this.controls.update();
+        if (onProgress) onProgress(elapsed / totalDuration);
+        requestAnimationFrame(animate);
+      } else {
+        // Snap to last keyframe
+        const last = kfs[kfs.length - 1];
+        this.camera.position.fromArray(last.position);
+        this.controls.target.fromArray(last.target);
+        this.camera.fov = last.fov;
+        this.camera.updateProjectionMatrix();
+        this.controls.update();
+        this.cinematic.previewing = false;
+        if (this.controls) this.controls.enabled = true;
+        if (onProgress) onProgress(1.0);
+        if (onComplete) onComplete();
+        console.log('[Viewer] Preview animation complete');
+      }
+    };
+    requestAnimationFrame(animate);
+  },
+
+  /**
+   * Stop preview animation.
+   */
+  stopPreview() {
+    this.cinematic.previewing = false;
+    if (this.controls) this.controls.enabled = true;
+  },
+
+  /**
+   * Export video: resize canvas, play animation, record via MediaRecorder.
+   * Calls onProgress(t), onComplete(blob), onError(msg).
+   */
+  async exportVideo(onProgress, onComplete, onError) {
+    const kfs = this.cinematic.keyframes;
+    if (kfs.length < 2) {
+      if (onError) onError('至少需要 2 个关键帧');
+      return;
+    }
+
+    const preset = this.ASPECT_PRESETS[this.cinematic.aspectRatio];
+    if (!preset) {
+      if (onError) onError('无效的比例');
+      return;
+    }
+
+    // Check MediaRecorder support
+    if (typeof MediaRecorder === 'undefined') {
+      if (onError) onError('设备不支持视频录制');
+      return;
+    }
+
+    // Pick best supported mime type
+    const mimeTypes = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+      'video/mp4',
+    ];
+    let mimeType = '';
+    for (const mt of mimeTypes) {
+      if (MediaRecorder.isTypeSupported(mt)) {
+        mimeType = mt;
+        break;
+      }
+    }
+    if (!mimeType) {
+      if (onError) onError('不支持的视频格式');
+      return;
+    }
+
+    console.log('[Viewer] Export video:', preset.exportW, 'x', preset.exportH, mimeType);
+
+    // Save current canvas size and resize for export
+    const origW = this.container.clientWidth;
+    const origH = this.container.clientHeight;
+    this._savedCanvasSize = { w: origW, h: origH };
+
+    // Resize renderer drawing buffer (false = don't update CSS style)
+    this.renderer.setSize(preset.exportW, preset.exportH, false);
+    this.camera.aspect = preset.w / preset.h;
+    this.camera.updateProjectionMatrix();
+
+    // Wait one frame for resize to take effect
+    await new Promise(r => requestAnimationFrame(r));
+
+    // Setup MediaRecorder
+    const fps = 30;
+    const stream = this.canvas.captureStream(fps);
+    this.cinematic._recordChunks = [];
+
+    const recorder = new MediaRecorder(stream, {
+      mimeType,
+      videoBitsPerSecond: 8_000_000,  // 8 Mbps for high quality
+    });
+    this.cinematic._mediaRecorder = recorder;
+
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) {
+        this.cinematic._recordChunks.push(e.data);
+      }
+    };
+
+    recorder.onstop = () => {
+      const blob = new Blob(this.cinematic._recordChunks, { type: mimeType });
+      const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+      console.log('[Viewer] Video recorded:', blob.size, 'bytes');
+
+      // Restore canvas size
+      this.renderer.setSize(origW, origH, false);
+      this.camera.aspect = this.cinematic._savedAspect || (origW / origH);
+      this.camera.fov = this.cinematic._savedFov || this.camera.fov;
+      this.camera.updateProjectionMatrix();
+      this._savedCanvasSize = null;
+
+      if (onComplete) onComplete(blob, ext);
+    };
+
+    recorder.onerror = (e) => {
+      console.error('[Viewer] MediaRecorder error:', e);
+      this.renderer.setSize(origW, origH, false);
+      this._savedCanvasSize = null;
+      if (onError) onError('录制失败');
+    };
+
+    // Start recording
+    recorder.start();
+    this.cinematic.recording = true;
+
+    // Disable controls
+    if (this.controls) this.controls.enabled = false;
+
+    // Play animation
+    const totalDuration = this.getTotalDuration();
+    const startTime = performance.now();
+
+    const animate = () => {
+      if (!this.cinematic.recording) {
+        recorder.stop();
+        return;
+      }
+      const elapsed = (performance.now() - startTime) / 1000;
+      const state = this._getInterpolatedState(elapsed);
+
+      if (state && elapsed < totalDuration) {
+        this.camera.position.set(state.position.x, state.position.y, state.position.z);
+        this.controls.target.set(state.target.x, state.target.y, state.target.z);
+        this.camera.fov = state.fov;
+        this.camera.updateProjectionMatrix();
+        this.controls.update();
+        // Explicit render to ensure frame is captured
+        this.renderer.render(this.scene, this.camera);
+        if (onProgress) onProgress(elapsed / totalDuration);
+        requestAnimationFrame(animate);
+      } else {
+        // Snap to last keyframe and render final frame
+        const last = kfs[kfs.length - 1];
+        this.camera.position.fromArray(last.position);
+        this.controls.target.fromArray(last.target);
+        this.camera.fov = last.fov;
+        this.camera.updateProjectionMatrix();
+        this.controls.update();
+        this.renderer.render(this.scene, this.camera);
+        this.cinematic.recording = false;
+        if (this.controls) this.controls.enabled = true;
+        // Small delay to ensure last frame is captured
+        setTimeout(() => recorder.stop(), 200);
+        if (onProgress) onProgress(1.0);
+        console.log('[Viewer] Recording complete, stopping...');
+      }
+    };
+    requestAnimationFrame(animate);
   },
 
   /**
