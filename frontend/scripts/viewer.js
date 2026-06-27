@@ -474,75 +474,110 @@ const Viewer = {
       return false;
     }
 
-    console.log('[Viewer] Spark material type:', mat.constructor.name);
-
-    // Add uniforms
-    mat.uniforms.uRevealRadius = { value: 0.0 };
+    // Two-radius reveal: radius1 = point cloud (grayscale), radius2 = color
+    mat.uniforms.uRevealRadius1 = { value: 0.0 };
+    mat.uniforms.uRevealRadius2 = { value: 0.0 };
     mat.uniforms.uRevealCenter = { value: new THREE.Vector3(0, 0, 0) };
     mat.uniforms.uRevealMaxDist = { value: 1.0 };
     mat.uniforms.uRevealActive = { value: 0.0 };
+    mat.uniforms.uRevealFade = { value: 1.0 }; // 1 = full effect, 0 = off (for end fade-out)
 
-    // Use onBeforeCompile — this is the reliable Three.js way to modify shaders.
-    // It receives the FINAL shader source after Three.js processes includes.
     const originalOnBeforeCompile = mat.onBeforeCompile;
     mat.onBeforeCompile = (shader) => {
-      // Chain original if exists
       if (originalOnBeforeCompile) originalOnBeforeCompile(shader);
 
-      shader.uniforms.uRevealRadius = mat.uniforms.uRevealRadius;
+      shader.uniforms.uRevealRadius1 = mat.uniforms.uRevealRadius1;
+      shader.uniforms.uRevealRadius2 = mat.uniforms.uRevealRadius2;
       shader.uniforms.uRevealCenter = mat.uniforms.uRevealCenter;
       shader.uniforms.uRevealMaxDist = mat.uniforms.uRevealMaxDist;
       shader.uniforms.uRevealActive = mat.uniforms.uRevealActive;
+      shader.uniforms.uRevealFade = mat.uniforms.uRevealFade;
 
-      // Patch vertex shader: compute distance from splat center to reveal center
+      // Vertex shader: compute distance
       let vs = shader.vertexShader;
-      // Add output varying
       vs = vs.replace(
         'void main() {',
         'out float vRevealDist;\nuniform vec3 uRevealCenter;\nuniform float uRevealMaxDist;\nvoid main() {'
       );
-      // Compute distance right before viewCenter calculation
       vs = vs.replace(
         'vec3 viewCenter =',
         'vRevealDist = length(center - uRevealCenter) / uRevealMaxDist;\nvec3 viewCenter ='
       );
       shader.vertexShader = vs;
 
-      // Patch fragment shader
+      // Fragment shader: two-pass scan with grayscale + color
       let fs = shader.fragmentShader;
-      // Add input varying and uniforms at the top
       fs = fs.replace(
         'void main() {',
-        'in float vRevealDist;\nuniform float uRevealRadius;\nuniform float uRevealActive;\nvoid main() {'
+        'in float vRevealDist;\nuniform float uRevealRadius1;\nuniform float uRevealRadius2;\nuniform float uRevealActive;\nuniform float uRevealFade;\nvoid main() {'
       );
-      // Insert reveal logic before the minAlpha discard
+      // Insert reveal logic before minAlpha discard
+      // Narrow glow width (0.05 = ~5% of maxDist)
       fs = fs.replace(
         'if (rgba.a < minAlpha) {',
-        'if (uRevealActive > 0.5) {\n            float revealDist = vRevealDist;\n            float revealRadius = uRevealRadius;\n            float glowWidth = 0.15;\n            if (revealDist > revealRadius + glowWidth) {\n                discard;\n            }\n            if (revealDist > revealRadius) {\n                float glow = 1.0 - (revealDist - revealRadius) / glowWidth;\n                rgba.a *= glow;\n                rgba.rgb += vec3(0.2, 0.5, 0.8) * glow * 0.5;\n            }\n        }\n        if (rgba.a < minAlpha) {'
+        'if (uRevealActive > 0.5) {\n' +
+        '            float d = vRevealDist;\n' +
+        '            float r1 = uRevealRadius1;\n' +
+        '            float r2 = uRevealRadius2;\n' +
+        '            float gw = 0.05;\n' +
+        '            // Beyond both radii + glow: hidden\n' +
+        '            if (d > max(r1, r2) + gw) {\n' +
+        '                discard;\n' +
+        '            }\n' +
+        '            // Pass 1: point cloud scan (grayscale)\n' +
+        '            if (d > r1 + gw) {\n' +
+        '                discard;\n' +
+        '            }\n' +
+        '            if (d <= r1 && d > r2) {\n' +
+        '                // Inside radius1 but outside radius2: grayscale point cloud\n' +
+        '                float gray = dot(rgba.rgb, vec3(0.3, 0.59, 0.11));\n' +
+        '                rgba.rgb = vec3(gray) * 1.15;\n' +
+        '            }\n' +
+        '            // Glow edge for pass 1 (cyan, narrow)\n' +
+        '            if (d > r1 && d <= r1 + gw) {\n' +
+        '                float g1 = 1.0 - (d - r1) / gw;\n' +
+        '                float gray = dot(rgba.rgb, vec3(0.3, 0.59, 0.11));\n' +
+        '                rgba.rgb = mix(vec3(gray) * 1.15, rgba.rgb, 0.0);\n' +
+        '                rgba.rgb += vec3(0.2, 0.6, 0.9) * g1;\n' +
+        '                rgba.a *= g1 * uRevealFade;\n' +
+        '            }\n' +
+        '            // Glow edge for pass 2 (orange, narrow)\n' +
+        '            if (d > r2 && d <= r2 + gw && d <= r1) {\n' +
+        '                float g2 = 1.0 - (d - r2) / gw;\n' +
+        '                float gray = dot(rgba.rgb, vec3(0.3, 0.59, 0.11));\n' +
+        '                rgba.rgb = mix(vec3(gray) * 1.15, rgba.rgb, g2);\n' +
+        '                rgba.rgb += vec3(0.9, 0.5, 0.15) * g2 * 0.7;\n' +
+        '                rgba.a *= mix(g2, 1.0, g2) * uRevealFade;\n' +
+        '            }\n' +
+        '            // Apply fade-out multiplier\n' +
+        '            rgba.a *= uRevealFade;\n' +
+        '        }\n' +
+        '        if (rgba.a < minAlpha) {'
       );
       shader.fragmentShader = fs;
 
-      console.log('[Viewer] onBeforeCompile: shaders patched');
-      console.log('[Viewer] VS has vRevealDist:', vs.includes('vRevealDist'));
-      console.log('[Viewer] FS has uRevealActive:', fs.includes('uRevealActive'));
+      console.log('[Viewer] onBeforeCompile: two-pass shaders patched');
     };
 
     mat.needsUpdate = true;
     this._revealShaderReady = true;
-    console.log('[Viewer] Reveal shader setup complete (onBeforeCompile)');
+    console.log('[Viewer] Reveal shader setup complete (two-pass onBeforeCompile)');
     return true;
   },
 
   /**
-   * Play the sonar reveal + camera dolly animation.
-   * - Splat reveal: radius expands from 0 to 1 (center → outward)
-   * - Camera: starts pulled back, dollies to final position
-   * - Duration: ~2.5 seconds
+   * Play two-pass sonar reveal + camera dolly animation.
+   *
+   * Timeline (~3.5s total):
+   *   0.0s - 1.8s: Pass 1 — grayscale point cloud expands (radius1: 0→1.2)
+   *   0.8s - 2.8s: Pass 2 — color expands on top (radius2: 0→1.2)
+   *   0.0s - 2.8s: Camera dolly (pullback → final position)
+   *   2.8s - 3.3s: Fade-out (uRevealFade: 1→0, then uRevealActive: 1→0)
    */
   playRevealAnimation(finalCameraPos, finalTarget) {
-    console.log('[Viewer] playRevealAnimation called, shaderReady:', !!this._revealShaderReady);
+    console.log('[Viewer] playRevealAnimation (two-pass), shaderReady:', !!this._revealShaderReady);
 
-    // Camera dolly ALWAYS runs (doesn't depend on shader)
+    // Camera dolly ALWAYS runs
     const startPos = finalCameraPos.clone();
     const startTarget = finalTarget.clone();
     const viewDir = new THREE.Vector3().subVectors(finalCameraPos, finalTarget).normalize();
@@ -553,73 +588,94 @@ const Viewer = {
     this.controls.target.copy(startTarget);
     this.controls.update();
 
-    // Disable user input during animation
     this.controls.enableRotate = false;
     this.controls.enableZoom = false;
     this.controls.enablePan = false;
 
     // Activate reveal shader IF available
     let revealActive = false;
-    if (this._revealShaderReady && this.spark?.material?.uniforms?.uRevealRadius) {
-      const uniforms = this.spark.material.uniforms;
+    const u = () => this.spark?.material?.uniforms;
 
-      // Compute model center and max distance in splat local space
+    if (this._revealShaderReady && u()?.uRevealRadius1) {
       try {
         const localBox = this.splat.getBoundingBox();
         if (localBox) {
           const center = localBox.getCenter(new THREE.Vector3());
           const size = localBox.getSize(new THREE.Vector3());
           const maxDist = size.length() / 2;
-          uniforms.uRevealCenter.value.copy(center);
-          // Use FULL max distance so all splats are covered when radius reaches 1
-          uniforms.uRevealMaxDist.value = Math.max(maxDist, 0.001);
+          u().uRevealCenter.value.copy(center);
+          u().uRevealMaxDist.value = Math.max(maxDist, 0.001);
           console.log('[Viewer] Reveal center:', center.toArray(), 'maxDist:', maxDist);
         }
       } catch (e) {
         console.log('[Viewer] Bounding box error:', e.message);
       }
 
-      uniforms.uRevealActive.value = 1.0;
-      uniforms.uRevealRadius.value = 0.0;
+      u().uRevealActive.value = 1.0;
+      u().uRevealRadius1.value = 0.0;
+      u().uRevealRadius2.value = 0.0;
+      u().uRevealFade.value = 1.0;
       revealActive = true;
-      console.log('[Viewer] Reveal shader activated');
+      console.log('[Viewer] Two-pass reveal shader activated');
     } else {
       console.log('[Viewer] Reveal shader not available, camera-only animation');
     }
 
-    const duration = 2500;
+    // Timing constants (ms)
+    const camDuration = 2800;
+    const pass1Start = 0,     pass1Duration = 1800;
+    const pass2Start = 800,   pass2Duration = 2000;
+    const fadeStart = 2800,   fadeDuration = 500;
+    const totalDuration = 3300;
+
     const startTime = performance.now();
     const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
     const easeInOutQuad = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 
     const animateReveal = () => {
       const elapsed = performance.now() - startTime;
-      const t = Math.min(elapsed / duration, 1.0);
 
-      // Reveal radius: ease-out, expand to 1.2 to ensure all splats covered
-      if (revealActive && this.spark?.material?.uniforms?.uRevealRadius) {
-        const revealT = easeOutCubic(t);
-        this.spark.material.uniforms.uRevealRadius.value = revealT * 1.2;
+      // Pass 1: grayscale point cloud radius
+      if (revealActive && u()?.uRevealRadius1) {
+        const t1 = Math.max(0, Math.min(elapsed - pass1Start, pass1Duration)) / pass1Duration;
+        u().uRevealRadius1.value = easeOutCubic(t1) * 1.2;
       }
 
-      // Camera dolly: ease-in-out
-      const camT = easeInOutQuad(t);
-      this.camera.position.lerpVectors(startPos, finalCameraPos, camT);
-      this.controls.target.lerpVectors(startTarget, finalTarget, camT);
+      // Pass 2: color radius (starts later)
+      if (revealActive && u()?.uRevealRadius2) {
+        const t2 = Math.max(0, Math.min(elapsed - pass2Start, pass2Duration)) / pass2Duration;
+        u().uRevealRadius2.value = easeOutCubic(t2) * 1.2;
+      }
+
+      // Camera dolly
+      const camT = Math.min(elapsed / camDuration, 1.0);
+      const camEased = easeInOutQuad(camT);
+      this.camera.position.lerpVectors(startPos, finalCameraPos, camEased);
+      this.controls.target.lerpVectors(startTarget, finalTarget, camEased);
       this.controls.update();
 
-      if (t < 1.0) {
+      // Fade-out phase: smoothly reduce effect
+      if (elapsed > fadeStart) {
+        const fadeT = Math.min((elapsed - fadeStart) / fadeDuration, 1.0);
+        if (revealActive && u()?.uRevealFade) {
+          u().uRevealFade.value = 1.0 - fadeT;
+        }
+      }
+
+      if (elapsed < totalDuration) {
         requestAnimationFrame(animateReveal);
       } else {
-        // Deactivate reveal, restore controls
-        if (revealActive && this.spark?.material?.uniforms) {
-          this.spark.material.uniforms.uRevealActive.value = 0.0;
-          this.spark.material.uniforms.uRevealRadius.value = 1.0;
+        // Fully deactivate
+        if (revealActive && u()) {
+          u().uRevealActive.value = 0.0;
+          u().uRevealFade.value = 1.0;
+          u().uRevealRadius1.value = 1.2;
+          u().uRevealRadius2.value = 1.2;
         }
         this.controls.enableRotate = true;
         this.controls.enableZoom = true;
         this.controls.enablePan = true;
-        console.log('[Viewer] Reveal animation complete');
+        console.log('[Viewer] Two-pass reveal animation complete');
       }
     };
 
