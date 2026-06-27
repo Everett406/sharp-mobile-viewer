@@ -481,6 +481,7 @@ const Viewer = {
     mat.uniforms.uRevealMaxDist = { value: 1.0 };
     mat.uniforms.uRevealActive = { value: 0.0 };
     mat.uniforms.uRevealFade = { value: 1.0 }; // 1 = full effect, 0 = off (for end fade-out)
+    mat.uniforms.uPointPixelRadius = { value: 2.5 }; // Screen-space dot radius in pixels
 
     const originalOnBeforeCompile = mat.onBeforeCompile;
     mat.onBeforeCompile = (shader) => {
@@ -492,6 +493,7 @@ const Viewer = {
       shader.uniforms.uRevealMaxDist = mat.uniforms.uRevealMaxDist;
       shader.uniforms.uRevealActive = mat.uniforms.uRevealActive;
       shader.uniforms.uRevealFade = mat.uniforms.uRevealFade;
+      shader.uniforms.uPointPixelRadius = mat.uniforms.uPointPixelRadius;
 
       // Vertex shader: compute distance
       let vs = shader.vertexShader;
@@ -509,11 +511,13 @@ const Viewer = {
       let fs = shader.fragmentShader;
       fs = fs.replace(
         'void main() {',
-        'in float vRevealDist;\nuniform float uRevealRadius1;\nuniform float uRevealRadius2;\nuniform float uRevealActive;\nuniform float uRevealFade;\nvoid main() {'
+        'in float vRevealDist;\nuniform float uRevealRadius1;\nuniform float uRevealRadius2;\nuniform float uRevealActive;\nuniform float uRevealFade;\nuniform float uPointPixelRadius;\nvoid main() {'
       );
       // Insert reveal logic before minAlpha discard
-      // z2 = dot(vSplatUv, vSplatUv) in range [0, ~adjustedStdDev²]
-      // For point cloud: use fixed z2 threshold (small hard dot, independent of splat size)
+      // z2 = dot(vSplatUv, vSplatUv) in UV space (range [0, ~adjustedStdDev²])
+      // Use fwidth to compute screen-space uniform dot size:
+      //   fwidth(vSplatUv) gives UV units per screen pixel
+      //   pointThresh = (targetPixelRadius * pixelInUv)² → uniform screen-space dots
       fs = fs.replace(
         'if (rgba.a < minAlpha) {',
         'if (uRevealActive > 0.5) {\n' +
@@ -521,29 +525,38 @@ const Viewer = {
         '            float r1 = uRevealRadius1;\n' +
         '            float r2 = uRevealRadius2;\n' +
         '            float gw = 0.05;\n' +
-        '            // Fixed threshold for point cloud dots (independent of splat size)\n' +
-        '            float pointThresh = 0.03;\n' +
+        '            // Screen-space uniform dot size: fwidth gives UV units per pixel\n' +
+        '            vec2 uvDeriv = fwidth(vSplatUv);\n' +
+        '            float pixelInUv = max(length(uvDeriv), 0.0001);\n' +
+        '            float dotUvRadius = uPointPixelRadius * pixelInUv;\n' +
+        '            float pointThresh = dotUvRadius * dotUvRadius;\n' +
+        '            float dotRadius = sqrt(pointThresh);\n' +
+        '            float distFromCenter = sqrt(z2);\n' +
+        '            // Circular soft-edged dot: smoothstep for anti-aliased circle edge\n' +
+        '            float dotAlpha = 1.0 - smoothstep(dotRadius * 0.5, dotRadius, distFromCenter);\n' +
         '\n' +
         '            // Beyond radius1 + glow: completely hidden\n' +
         '            if (d > r1 + gw) {\n' +
         '                discard;\n' +
         '            }\n' +
         '\n' +
-        '            // Pass 1 region: inside r1, outside r2+gw → point cloud (small hard dots)\n' +
+        '            // Pass 1 region: inside r1, outside r2+gw → point cloud (uniform dots)\n' +
         '            if (d <= r1 && d > r2 + gw) {\n' +
-        '                if (z2 > pointThresh) { discard; }\n' +
+        '                if (dotAlpha < 0.01) { discard; }\n' +
         '                float gray = dot(rgba.rgb, vec3(0.3, 0.59, 0.11));\n' +
-        '                rgba.rgb = vec3(gray) * 1.3;\n' +
-        '                rgba.a = 1.0;\n' +
+        '                // Retain 15% original color for natural appearance\n' +
+        '                rgba.rgb = mix(vec3(gray), rgba.rgb, 0.15);\n' +
+        '                rgba.a = dotAlpha;\n' +
         '            }\n' +
         '\n' +
         '            // Glow edge pass 1 (cyan, narrow) — point cloud dots\n' +
         '            if (d > r1 && d <= r1 + gw) {\n' +
         '                float g1 = 1.0 - (d - r1) / gw;\n' +
-        '                if (z2 > pointThresh) { discard; }\n' +
+        '                if (dotAlpha < 0.01) { discard; }\n' +
         '                float gray = dot(rgba.rgb, vec3(0.3, 0.59, 0.11));\n' +
-        '                rgba.rgb = vec3(gray) * 1.3 + vec3(0.2, 0.6, 0.9) * g1;\n' +
-        '                rgba.a = g1;\n' +
+        '                rgba.rgb = mix(vec3(gray), rgba.rgb, 0.15);\n' +
+        '                rgba.rgb += vec3(0.15, 0.5, 0.8) * g1 * 0.6;\n' +
+        '                rgba.a = dotAlpha * g1;\n' +
         '            }\n' +
         '\n' +
         '            // Glow edge pass 2 (orange) — expand from point to full splat\n' +
@@ -551,11 +564,14 @@ const Viewer = {
         '                float g2 = 1.0 - (d - r2) / gw;\n' +
         '                // Expand threshold from point to full splat as color arrives\n' +
         '                float expandThresh = mix(pointThresh, adjustedStdDev * adjustedStdDev, g2);\n' +
-        '                if (z2 > expandThresh) { discard; }\n' +
+        '                float expandRadius = sqrt(expandThresh);\n' +
+        '                float expandAlpha = 1.0 - smoothstep(expandRadius * 0.5, expandRadius, distFromCenter);\n' +
+        '                if (expandAlpha < 0.01) { discard; }\n' +
         '                float gray = dot(rgba.rgb, vec3(0.3, 0.59, 0.11));\n' +
-        '                rgba.rgb = mix(vec3(gray) * 1.3, rgba.rgb, g2);\n' +
-        '                rgba.rgb += vec3(0.9, 0.5, 0.15) * g2 * 0.7;\n' +
-        '                rgba.a = mix(g2 * 0.8, 1.0, g2);\n' +
+        '                vec3 pointCol = mix(vec3(gray), rgba.rgb, 0.15);\n' +
+        '                rgba.rgb = mix(pointCol, rgba.rgb, g2);\n' +
+        '                rgba.rgb += vec3(0.7, 0.4, 0.1) * g2 * 0.5;\n' +
+        '                rgba.a = mix(expandAlpha * g2, 1.0, g2);\n' +
         '            }\n' +
         '\n' +
         '            // Inside r2: full normal splat, NO modification\n' +
