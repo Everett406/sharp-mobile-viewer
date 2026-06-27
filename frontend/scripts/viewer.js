@@ -471,67 +471,66 @@ const Viewer = {
     const mat = this.spark?.material;
     if (!mat) {
       console.log('[Viewer] No material on spark, skipping reveal shader');
-      return;
+      return false;
     }
 
     console.log('[Viewer] Spark material type:', mat.constructor.name);
-    console.log('[Viewer] Has vertexShader:', !!mat.vertexShader);
-    console.log('[Viewer] Has fragmentShader:', !!mat.fragmentShader);
-    console.log('[Viewer] Has uniforms:', !!mat.uniforms);
 
     // Add uniforms
-    mat.uniforms.uRevealRadius = { value: 0.0 };     // 0 = hidden, 1 = fully visible
+    mat.uniforms.uRevealRadius = { value: 0.0 };
     mat.uniforms.uRevealCenter = { value: new THREE.Vector3(0, 0, 0) };
-    mat.uniforms.uRevealMaxDist = { value: 1.0 };     // Max distance in splat space
-    mat.uniforms.uRevealActive = { value: 0.0 };      // 0 = off, 1 = on
+    mat.uniforms.uRevealMaxDist = { value: 1.0 };
+    mat.uniforms.uRevealActive = { value: 0.0 };
 
-    // Patch vertex shader: compute distance from splat center to reveal center
-    let vs = mat.vertexShader;
-    const vs1 = vs.includes('flat out float adjustedStdDev;');
-    // Add varying after the existing outputs
-    vs = vs.replace(
-      'flat out float adjustedStdDev;',
-      'flat out float adjustedStdDev;\nout float vRevealDist;'
-    );
-    // Add uniforms
-    const vs2 = vs.includes('uniform float focalAdjustment;');
-    vs = vs.replace(
-      'uniform float focalAdjustment;',
-      'uniform float focalAdjustment;\nuniform vec3 uRevealCenter;\nuniform float uRevealMaxDist;\nuniform float uRevealActive;'
-    );
-    // Compute distance after center is unpacked (before early returns that use center)
-    const vs3 = vs.includes('vec3 viewCenter = (!enableCovSplats ? quatVec(renderToViewQuat, center) : (renderToViewBasis * center)) + renderToViewPos;');
-    vs = vs.replace(
-      'vec3 viewCenter = (!enableCovSplats ? quatVec(renderToViewQuat, center) : (renderToViewBasis * center)) + renderToViewPos;',
-      'vRevealDist = length(center - uRevealCenter) / uRevealMaxDist;\nvec3 viewCenter = (!enableCovSplats ? quatVec(renderToViewQuat, center) : (renderToViewBasis * center)) + renderToViewPos;'
-    );
-    mat.vertexShader = vs;
-    console.log('[Viewer] VS patches:', { hasAdjustedStdDev: vs1, hasFocalAdj: vs2, hasViewCenter: vs3 });
+    // Use onBeforeCompile — this is the reliable Three.js way to modify shaders.
+    // It receives the FINAL shader source after Three.js processes includes.
+    const originalOnBeforeCompile = mat.onBeforeCompile;
+    mat.onBeforeCompile = (shader) => {
+      // Chain original if exists
+      if (originalOnBeforeCompile) originalOnBeforeCompile(shader);
 
-    // Patch fragment shader: discard splats beyond reveal radius, add glow at edge
-    let fs = mat.fragmentShader;
-    const fs1 = fs.includes('flat in float adjustedStdDev;');
-    fs = fs.replace(
-      'flat in float adjustedStdDev;',
-      'flat in float adjustedStdDev;\nin float vRevealDist;\nuniform float uRevealRadius;\nuniform float uRevealActive;'
-    );
-    const fs2 = fs.includes('if (rgba.a < minAlpha) {\n        discard;\n    }');
-    // Insert reveal logic right after the z2 discard, before alpha computation
-    fs = fs.replace(
-      'if (rgba.a < minAlpha) {\n        discard;\n    }',
-      'if (uRevealActive > 0.5) {\n        float dist = vRevealDist;\n        float radius = uRevealRadius;\n        float glowWidth = 0.08;\n        if (dist > radius + glowWidth) {\n            discard;\n        }\n        if (dist > radius) {\n            float glow = 1.0 - (dist - radius) / glowWidth;\n            rgba.a *= glow * glow;\n            rgba.rgb += vec3(0.15, 0.4, 0.6) * glow;\n        }\n    }\n    if (rgba.a < minAlpha) {\n        discard;\n    }'
-    );
-    mat.fragmentShader = fs;
-    console.log('[Viewer] FS patches:', { hasAdjustedStdDev: fs1, hasDiscardPattern: fs2 });
+      shader.uniforms.uRevealRadius = mat.uniforms.uRevealRadius;
+      shader.uniforms.uRevealCenter = mat.uniforms.uRevealCenter;
+      shader.uniforms.uRevealMaxDist = mat.uniforms.uRevealMaxDist;
+      shader.uniforms.uRevealActive = mat.uniforms.uRevealActive;
 
-    // Verify patches applied
-    console.log('[Viewer] VS has vRevealDist:', vs.includes('vRevealDist'));
-    console.log('[Viewer] FS has uRevealActive:', fs.includes('uRevealActive'));
-    console.log('[Viewer] FS has reveal logic:', fs.includes('if (uRevealActive > 0.5)'));
+      // Patch vertex shader: compute distance from splat center to reveal center
+      let vs = shader.vertexShader;
+      // Add output varying
+      vs = vs.replace(
+        'void main() {',
+        'out float vRevealDist;\nuniform vec3 uRevealCenter;\nuniform float uRevealMaxDist;\nvoid main() {'
+      );
+      // Compute distance right before viewCenter calculation
+      vs = vs.replace(
+        'vec3 viewCenter =',
+        'vRevealDist = length(center - uRevealCenter) / uRevealMaxDist;\nvec3 viewCenter ='
+      );
+      shader.vertexShader = vs;
+
+      // Patch fragment shader
+      let fs = shader.fragmentShader;
+      // Add input varying and uniforms at the top
+      fs = fs.replace(
+        'void main() {',
+        'in float vRevealDist;\nuniform float uRevealRadius;\nuniform float uRevealActive;\nvoid main() {'
+      );
+      // Insert reveal logic before the minAlpha discard
+      fs = fs.replace(
+        'if (rgba.a < minAlpha) {',
+        'if (uRevealActive > 0.5) {\n            float revealDist = vRevealDist;\n            float revealRadius = uRevealRadius;\n            float glowWidth = 0.15;\n            if (revealDist > revealRadius + glowWidth) {\n                discard;\n            }\n            if (revealDist > revealRadius) {\n                float glow = 1.0 - (revealDist - revealRadius) / glowWidth;\n                rgba.a *= glow;\n                rgba.rgb += vec3(0.2, 0.5, 0.8) * glow * 0.5;\n            }\n        }\n        if (rgba.a < minAlpha) {'
+      );
+      shader.fragmentShader = fs;
+
+      console.log('[Viewer] onBeforeCompile: shaders patched');
+      console.log('[Viewer] VS has vRevealDist:', vs.includes('vRevealDist'));
+      console.log('[Viewer] FS has uRevealActive:', fs.includes('uRevealActive'));
+    };
 
     mat.needsUpdate = true;
     this._revealShaderReady = true;
-    console.log('[Viewer] Reveal shader patched successfully');
+    console.log('[Viewer] Reveal shader setup complete (onBeforeCompile)');
+    return true;
   },
 
   /**
@@ -541,41 +540,13 @@ const Viewer = {
    * - Duration: ~2.5 seconds
    */
   playRevealAnimation(finalCameraPos, finalTarget) {
-    console.log('[Viewer] playRevealAnimation called, shaderReady:', this._revealShaderReady);
-    if (!this._revealShaderReady || !this.spark?.material?.uniforms?.uRevealRadius) {
-      console.log('[Viewer] Reveal shader not available, skipping animation');
-      return;
-    }
+    console.log('[Viewer] playRevealAnimation called, shaderReady:', !!this._revealShaderReady);
 
-    const mat = this.spark.material;
-    const uniforms = mat.uniforms;
-    console.log('[Viewer] uRevealRadius uniform:', uniforms.uRevealRadius);
-    console.log('[Viewer] uRevealActive uniform:', uniforms.uRevealActive);
-
-    // Compute model center and max distance in splat local space
-    try {
-      const localBox = this.splat.getBoundingBox();
-      if (localBox) {
-        const center = localBox.getCenter(new THREE.Vector3());
-        const size = localBox.getSize(new THREE.Vector3());
-        const maxDist = size.length() / 2;
-        uniforms.uRevealCenter.value.copy(center);
-        uniforms.uRevealMaxDist.value = maxDist * 0.6; // Scale so reveal reaches edges
-      }
-    } catch (e) {
-      console.log('[Viewer] Could not get bounding box for reveal:', e.message);
-    }
-
-    // Activate reveal
-    uniforms.uRevealActive.value = 1.0;
-    uniforms.uRevealRadius.value = 0.0;
-
-    // Camera animation: start from a pulled-back position
+    // Camera dolly ALWAYS runs (doesn't depend on shader)
     const startPos = finalCameraPos.clone();
     const startTarget = finalTarget.clone();
-    // Pull camera back along view direction
     const viewDir = new THREE.Vector3().subVectors(finalCameraPos, finalTarget).normalize();
-    const pullback = viewDir.multiplyScalar(3.0); // 3 units back
+    const pullback = viewDir.multiplyScalar(3.0);
     startPos.add(pullback);
 
     this.camera.position.copy(startPos);
@@ -587,9 +558,37 @@ const Viewer = {
     this.controls.enableZoom = false;
     this.controls.enablePan = false;
 
-    const duration = 2500; // ms
-    const startTime = performance.now();
+    // Activate reveal shader IF available
+    let revealActive = false;
+    if (this._revealShaderReady && this.spark?.material?.uniforms?.uRevealRadius) {
+      const uniforms = this.spark.material.uniforms;
 
+      // Compute model center and max distance in splat local space
+      try {
+        const localBox = this.splat.getBoundingBox();
+        if (localBox) {
+          const center = localBox.getCenter(new THREE.Vector3());
+          const size = localBox.getSize(new THREE.Vector3());
+          const maxDist = size.length() / 2;
+          uniforms.uRevealCenter.value.copy(center);
+          // Use FULL max distance so all splats are covered when radius reaches 1
+          uniforms.uRevealMaxDist.value = Math.max(maxDist, 0.001);
+          console.log('[Viewer] Reveal center:', center.toArray(), 'maxDist:', maxDist);
+        }
+      } catch (e) {
+        console.log('[Viewer] Bounding box error:', e.message);
+      }
+
+      uniforms.uRevealActive.value = 1.0;
+      uniforms.uRevealRadius.value = 0.0;
+      revealActive = true;
+      console.log('[Viewer] Reveal shader activated');
+    } else {
+      console.log('[Viewer] Reveal shader not available, camera-only animation');
+    }
+
+    const duration = 2500;
+    const startTime = performance.now();
     const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
     const easeInOutQuad = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 
@@ -597,11 +596,13 @@ const Viewer = {
       const elapsed = performance.now() - startTime;
       const t = Math.min(elapsed / duration, 1.0);
 
-      // Reveal radius: ease-out (fast start, slow finish for dramatic edge)
-      const revealT = easeOutCubic(t);
-      uniforms.uRevealRadius.value = revealT;
+      // Reveal radius: ease-out, expand to 1.2 to ensure all splats covered
+      if (revealActive && this.spark?.material?.uniforms?.uRevealRadius) {
+        const revealT = easeOutCubic(t);
+        this.spark.material.uniforms.uRevealRadius.value = revealT * 1.2;
+      }
 
-      // Camera dolly: ease-in-out (smooth acceleration/deceleration)
+      // Camera dolly: ease-in-out
       const camT = easeInOutQuad(t);
       this.camera.position.lerpVectors(startPos, finalCameraPos, camT);
       this.controls.target.lerpVectors(startTarget, finalTarget, camT);
@@ -610,9 +611,11 @@ const Viewer = {
       if (t < 1.0) {
         requestAnimationFrame(animateReveal);
       } else {
-        // Animation complete: deactivate reveal, restore controls
-        uniforms.uRevealActive.value = 0.0;
-        uniforms.uRevealRadius.value = 1.0;
+        // Deactivate reveal, restore controls
+        if (revealActive && this.spark?.material?.uniforms) {
+          this.spark.material.uniforms.uRevealActive.value = 0.0;
+          this.spark.material.uniforms.uRevealRadius.value = 1.0;
+        }
         this.controls.enableRotate = true;
         this.controls.enableZoom = true;
         this.controls.enablePan = true;
