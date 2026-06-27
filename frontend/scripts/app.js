@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.13.1';
+const APP_VERSION = '0.13.2';
 
 const App = {
   currentPage: 'welcome',
@@ -1051,6 +1051,8 @@ function setupEventListeners() {
 
   document.getElementById('cinematic-aspect')?.addEventListener('change', (e) => {
     window.SharpViewViewer?.setAspectRatio(e.target.value);
+    const label = document.getElementById('cinematic-aspect-label');
+    if (label) label.textContent = e.target.value;
   });
 
   document.getElementById('cinematic-fps')?.addEventListener('change', (e) => {

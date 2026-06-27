@@ -217,13 +217,13 @@ const Viewer = {
           const rw = entry.contentRect.width;
           const rh = entry.contentRect.height;
           if (rw < 10 || rh < 10) return;
+          // Always keep canvas matching container, even in cinematic mode
+          this.camera.aspect = rw / rh;
+          this.camera.updateProjectionMatrix();
+          this.renderer.setSize(rw, rh, false);
+          // Update cinematic frame overlay if active
           if (this.cinematic.active) {
-            // In cinematic mode: only update frame rect, don't touch renderer size
             this._applyCinematicAspect();
-          } else {
-            this.camera.aspect = rw / rh;
-            this.camera.updateProjectionMatrix();
-            this.renderer.setSize(rw, rh, false);
           }
         }
       });
@@ -960,26 +960,7 @@ const Viewer = {
       }
 
       if (this.renderer && this.scene && this.camera) {
-        // In cinematic mode: render only within the frame area using viewport/scissor
-        if (this.cinematic.active && this.cinematic._frameRect && !this.cinematic.recording) {
-          const rect = this.cinematic._frameRect;
-          const dpr = this.renderer.getPixelRatio();
-          const canvasH = this.renderer.domElement.height;
-          // WebGL Y is bottom-up
-          const vpX = rect.x * dpr;
-          const vpY = canvasH - (rect.y + rect.h) * dpr;
-          const vpW = rect.w * dpr;
-          const vpH = rect.h * dpr;
-          this.renderer.setViewport(vpX, vpY, vpW, vpH);
-          this.renderer.setScissor(vpX, vpY, vpW, vpH);
-          this.renderer.setScissorTest(true);
-          this.renderer.render(this.scene, this.camera);
-          this.renderer.setScissorTest(false);
-          // Reset viewport to full for next frame's clear
-          this.renderer.setViewport(0, 0, this.renderer.domElement.width, this.renderer.domElement.height);
-        } else {
-          this.renderer.render(this.scene, this.camera);
-        }
+        this.renderer.render(this.scene, this.camera);
       }
 
       this.fpsCounter.frames++;
@@ -1349,9 +1330,14 @@ const Viewer = {
   enterCinematicMode() {
     if (this.cinematic.active || !this.camera) return;
     this.cinematic.active = true;
-    // Save original camera settings
-    this.cinematic._savedAspect = this.camera.aspect;
-    this.cinematic._savedFov = this.camera.fov;
+    // Ensure canvas matches container size
+    if (this.container) {
+      const cw = this.container.clientWidth;
+      const ch = this.container.clientHeight;
+      this.renderer.setSize(cw, ch, false);
+      this.camera.aspect = cw / ch;
+      this.camera.updateProjectionMatrix();
+    }
     this._applyCinematicAspect();
     console.log('[Viewer] Cinematic mode entered, aspect:', this.cinematic.aspectRatio);
   },
@@ -1364,20 +1350,7 @@ const Viewer = {
     this.stopPreview();
     this.cinematic.active = false;
     this.cinematic._frameRect = null;
-    // Restore camera
-    if (this.camera && this.cinematic._savedAspect != null) {
-      this.camera.aspect = this.cinematic._savedAspect;
-      this.camera.fov = this.cinematic._savedFov;
-      this.camera.updateProjectionMatrix();
-    }
-    // Restore renderer size to container
-    if (this.container) {
-      const cw = this.container.clientWidth;
-      const ch = this.container.clientHeight;
-      this.renderer.setSize(cw, ch, false);
-      this.camera.aspect = cw / ch;
-      this.camera.updateProjectionMatrix();
-    }
+    // Camera aspect already matches container (we never changed it)
     console.log('[Viewer] Cinematic mode exited');
   },
 
@@ -1415,12 +1388,14 @@ const Viewer = {
     const frameX = (containerW - frameW) / 2;
     const frameY = (containerH - frameH) / 2;
 
-    // Store frame rect for viewport/scissor in render loop
+    // Store frame rect for export reference
     this.cinematic._frameRect = { x: frameX, y: frameY, w: frameW, h: frameH };
 
-    // Camera aspect matches the frame ratio for WYSIWYG
-    this.camera.aspect = targetAspect;
-    this.camera.updateProjectionMatrix();
+    // IMPORTANT: Do NOT change camera aspect here.
+    // SparkRenderer uses its own internal render target with its own scissor,
+    // so external viewport/scissor settings are ignored.
+    // Camera aspect stays matching the container → no compression.
+    // The frame overlay is purely visual (shows crop area for export).
 
     // Update frame overlay CSS
     const frame = document.getElementById('cinematic-frame');
@@ -1760,7 +1735,12 @@ const Viewer = {
       // Restore renderer to original state
       this.renderer.setPixelRatio(origDpr);
       this.renderer.setSize(origW / origDpr, origH / origDpr, false);
-      // Restore cinematic frame
+      // Restore camera aspect to container
+      if (this.container) {
+        this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
+        this.camera.updateProjectionMatrix();
+      }
+      // Restore cinematic frame overlay
       if (this.cinematic.active) {
         this._applyCinematicAspect();
       }
@@ -1772,6 +1752,10 @@ const Viewer = {
       console.error('[Viewer] MediaRecorder error:', e);
       this.renderer.setPixelRatio(origDpr);
       this.renderer.setSize(origW / origDpr, origH / origDpr, false);
+      if (this.container) {
+        this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
+        this.camera.updateProjectionMatrix();
+      }
       if (this.cinematic.active) {
         this._applyCinematicAspect();
       }
