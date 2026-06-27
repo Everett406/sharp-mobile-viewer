@@ -278,3 +278,23 @@
   border: none;
   cursor: pointer;
 }
+
+/* FOV range slider */
+#cinematic-fov::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--brand-500);
+  cursor: pointer;
+  border: 2px solid #fff;
+}
+#cinematic-fov::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--brand-500);
+  cursor: pointer;
+  border: 2px solid #fff;
+}

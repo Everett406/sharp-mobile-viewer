@@ -1695,6 +1695,10 @@ const Viewer = {
 
     console.log('[Viewer] Export video:', exportDims.w, 'x', exportDims.h, mimeType, fps, 'fps');
 
+    // Show recording overlay to hide the compressed preview during export
+    const recOverlay = document.getElementById('cinematic-recording');
+    if (recOverlay) recOverlay.style.display = 'flex';
+
     // Save current canvas size and resize for export
     const origW = this.renderer.domElement.width;
     const origH = this.renderer.domElement.height;
@@ -1732,6 +1736,10 @@ const Viewer = {
       const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
       console.log('[Viewer] Video recorded:', blob.size, 'bytes');
 
+      // Hide recording overlay
+      const recOverlay = document.getElementById('cinematic-recording');
+      if (recOverlay) recOverlay.style.display = 'none';
+
       // Restore renderer to original state
       this.renderer.setPixelRatio(origDpr);
       this.renderer.setSize(origW / origDpr, origH / origDpr, false);
@@ -1750,6 +1758,9 @@ const Viewer = {
 
     recorder.onerror = (e) => {
       console.error('[Viewer] MediaRecorder error:', e);
+      // Hide recording overlay
+      const recOverlay = document.getElementById('cinematic-recording');
+      if (recOverlay) recOverlay.style.display = 'none';
       this.renderer.setPixelRatio(origDpr);
       this.renderer.setSize(origW / origDpr, origH / origDpr, false);
       if (this.container) {

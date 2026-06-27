@@ -8,7 +8,7 @@
 // ═══════════════════════════════════════════════════════════
 // App State
 // ═══════════════════════════════════════════════════════════
-const APP_VERSION = '0.13.2';
+const APP_VERSION = '0.13.3';
 
 const App = {
   currentPage: 'welcome',
@@ -1002,6 +1002,7 @@ function setupEventListeners() {
         if (e.target.closest('.kf-chip-del')) return;
         _selectedKfIndex = i;
         window.SharpViewViewer?.goToKeyframe(i);
+        syncFovSlider();
         renderKeyframeList();
       });
       // Delete button
@@ -1025,6 +1026,8 @@ function setupEventListeners() {
     // Hide normal viewer controls
     document.querySelector('#page-viewer > div:last-child')?.style.setProperty('display', 'none');
     renderKeyframeList();
+    // Sync FOV slider to current camera FOV
+    syncFovSlider();
     // Re-init lucide icons for new elements
     if (window.lucide) lucide.createIcons();
   }
@@ -1062,6 +1065,27 @@ function setupEventListeners() {
   document.getElementById('cinematic-res')?.addEventListener('change', (e) => {
     window.SharpViewViewer?.setResolution(parseInt(e.target.value));
   });
+
+  // FOV slider: real-time camera FOV adjustment
+  const fovSlider = document.getElementById('cinematic-fov');
+  const fovVal = document.getElementById('cinematic-fov-val');
+  fovSlider?.addEventListener('input', (e) => {
+    const fov = parseFloat(e.target.value);
+    fovVal.textContent = `${fov}°`;
+    if (window.SharpViewViewer?.camera) {
+      window.SharpViewViewer.camera.fov = fov;
+      window.SharpViewViewer.camera.updateProjectionMatrix();
+    }
+  });
+
+  // Sync FOV slider when entering cinematic mode or jumping to keyframe
+  function syncFovSlider() {
+    if (window.SharpViewViewer?.camera && fovSlider && fovVal) {
+      const fov = Math.round(window.SharpViewViewer.camera.fov);
+      fovSlider.value = fov;
+      fovVal.textContent = `${fov}°`;
+    }
+  }
 
   document.getElementById('cinematic-add-kf')?.addEventListener('click', () => {
     const idx = window.SharpViewViewer?.addKeyframe();
@@ -1113,24 +1137,84 @@ function setupEventListeners() {
         progressBar.style.width = `${t * 100}%`;
         recTime.textContent = `${((performance.now() - exportStart) / 1000).toFixed(1)}s / ${totalDuration.toFixed(1)}s`;
       },
-      (blob, ext) => {
-        // Download the video
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `sharpview_${Date.now()}.${ext}`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+      async (blob, ext) => {
+        const fileName = `sharpview_${Date.now()}.${ext}`;
+        const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
 
         btn.disabled = false;
         btn.style.display = 'inline-flex';
         previewBtn.style.display = 'inline-flex';
         addBtn.style.display = 'inline-flex';
         progressContainer.style.display = 'none';
-        recIndicator.style.display = 'none';
-        showToast(`视频已导出 (${(blob.size / 1024 / 1024).toFixed(1)} MB)`);
+
+        // Try saving to gallery via Capacitor Filesystem
+        const capacitor = window.Capacitor;
+        const filesystem = capacitor?.Plugins?.Filesystem;
+        if (filesystem) {
+          try {
+            // Convert blob to base64
+            const arrayBuffer = await blob.arrayBuffer();
+            const bytes = new Uint8Array(arrayBuffer);
+            let binary = '';
+            const chunkSize = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+              binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+            }
+            const base64 = btoa(binary);
+
+            // Write to Movies/SharpView/ directory (shows in gallery)
+            await filesystem.writeFile({
+              path: `Movies/SharpView/${fileName}`,
+              data: base64,
+              directory: 'EXTERNAL_STORAGE',
+              recursive: true,
+            });
+            showToast(`视频已保存到相册 (${sizeMB} MB)`);
+          } catch (err) {
+            console.error('Filesystem save failed:', err);
+            // Fallback: try Documents directory
+            try {
+              const arrayBuffer = await blob.arrayBuffer();
+              const bytes = new Uint8Array(arrayBuffer);
+              let binary = '';
+              const chunkSize = 0x8000;
+              for (let i = 0; i < bytes.length; i += chunkSize) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+              }
+              const base64 = btoa(binary);
+              await filesystem.writeFile({
+                path: fileName,
+                data: base64,
+                directory: 'DOCUMENTS',
+                recursive: true,
+              });
+              showToast(`视频已保存到文档 (${sizeMB} MB)`);
+            } catch (err2) {
+              console.error('Documents save failed:', err2);
+              // Final fallback: browser download
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = fileName;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              showToast(`视频已下载 (${sizeMB} MB)`);
+            }
+          }
+        } else {
+          // Web browser: standard download
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          showToast(`视频已下载 (${sizeMB} MB)`);
+        }
       },
       (errMsg) => {
         btn.disabled = false;

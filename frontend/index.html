@@ -338,7 +338,7 @@
           </div>
           <h1 style="font-family:var(--font-display);font-weight:500;font-size:28px;color:var(--foreground);margin:0 0 6px 0">SharpView</h1>
           <div class="flex items-center gap-2 mb-3">
-            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.13.2</span>
+            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.13.3</span>
             <span class="badge muted" style="background:var(--brand-100);color:var(--brand-700);font-size:11px;min-height:22px;padding:0 8px">最新版本</span>
           </div>
           <p style="font-family:var(--font-serif);font-weight:400;font-size:14px;color:var(--secondary-foreground);font-style:italic;margin:0;text-align:center">将照片转化为 3D 高斯泼溅场景</p>
@@ -566,11 +566,13 @@
             <div id="cinematic-aspect-label" style="position:absolute;top:4px;left:50%;transform:translateX(-50%);padding:2px 8px;border-radius:4px;background:rgba(0,0,0,0.6);font:500 10px var(--font-mono);color:rgba(255,255,255,0.8)">16:9</div>
           </div>
         </div>
-        <!-- Cinematic recording indicator -->
-        <div id="cinematic-recording" style="position:absolute;top:52px;left:50%;transform:translateX(-50%);z-index:16;display:none;align-items:center;gap:8px;padding:6px 14px;border-radius:20px;background:rgba(220,38,38,0.9)">
-          <div style="width:8px;height:8px;border-radius:50%;background:#fff;animation:pulse-rec 1s infinite"></div>
-          <span style="font:500 12px var(--font-sans);color:#fff">录制中</span>
-          <span id="cinematic-rec-time" style="font:400 11px var(--font-mono);color:rgba(255,255,255,0.8)">0.0s</span>
+        <!-- Cinematic recording overlay (covers canvas during export) -->
+        <div id="cinematic-recording" style="position:absolute;inset:0;z-index:16;display:none;align-items:center;justify-content:center;flex-direction:column;gap:12px;background:rgba(0,0,0,0.85)">
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 16px;border-radius:20px;background:rgba(220,38,38,0.9)">
+            <div style="width:10px;height:10px;border-radius:50%;background:#fff;animation:pulse-rec 1s infinite"></div>
+            <span style="font:500 14px var(--font-sans);color:#fff">录制中</span>
+          </div>
+          <span id="cinematic-rec-time" style="font:400 13px var(--font-mono);color:rgba(255,255,255,0.6)">0.0s</span>
         </div>
         <!-- FPS 信息浮层 -->
         <div id="viewer-info" class="absolute top-14 left-4 px-2 py-1 rounded-md" style="background:rgba(0,0,0,0.4);display:none;z-index:10">
@@ -762,6 +764,12 @@
             </select>
           </div>
         </div>
+        <!-- FOV slider -->
+        <div class="flex items-center gap-2 mb-3">
+          <span style="font:400 11px var(--font-sans);color:rgba(255,255,255,0.5);min-width:28px">FOV</span>
+          <input type="range" id="cinematic-fov" min="20" max="120" step="1" value="60" style="flex:1;height:4px;-webkit-appearance:none;appearance:none;background:rgba(255,255,255,0.15);border-radius:2px;outline:none">
+          <span id="cinematic-fov-val" style="font:500 11px var(--font-mono);color:rgba(255,255,255,0.8);min-width:32px;text-align:right">60°</span>
+        </div>
         <!-- Progress bar -->
         <div id="cinematic-progress-container" style="display:none;margin-bottom:12px">
           <div style="height:4px;background:rgba(255,255,255,0.15);border-radius:2px;overflow:hidden">
@@ -825,8 +833,8 @@
 
   </div>
 
-  <script src="scripts/github.js?v=125" defer></script>
-  <script src="scripts/viewer-bundle.js?v=127" defer></script>
-  <script src="scripts/app.js?v=125" defer></script>
+  <script src="scripts/github.js?v=126" defer></script>
+  <script src="scripts/viewer-bundle.js?v=128" defer></script>
+  <script src="scripts/app.js?v=126" defer></script>
 </body>
 </html>
