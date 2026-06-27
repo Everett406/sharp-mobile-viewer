@@ -170,6 +170,9 @@ const Viewer = {
       });
       this.scene.add(this.spark);
 
+      // Patch Spark's splat shaders for reveal animation (sonar scan)
+      this._setupRevealShader();
+
       // Controls — match reference project defaults
       this.controls = new OrbitControls(this.camera, this.canvas);
       this.controls.enableDamping = true;
@@ -436,6 +439,12 @@ const Viewer = {
 
       // Auto-frame after load
       this.autoFrame();
+
+      // Play sonar reveal + camera dolly animation
+      const finalPos = this.camera.position.clone();
+      const finalTarget = this.controls.target.clone();
+      this.playRevealAnimation(finalPos, finalTarget);
+
       this._notifyStatus('ready', '3D 场景已就绪');
 
     } catch (e) {
@@ -448,6 +457,149 @@ const Viewer = {
         if (this.infoEl) this.infoEl.style.display = 'none';
       }
     }
+  },
+
+  /**
+   * Patch Spark's splat shaders to add a reveal (sonar scan) uniform.
+   * Injects uRevealRadius, uRevealCenter, uRevealMaxDist into both
+   * vertex and fragment shaders. Splat center distance from uRevealCenter
+   * is compared against uRevealRadius to show/hide splats with a glow edge.
+   */
+  _setupRevealShader() {
+    const mat = this.spark?.material;
+    if (!mat) {
+      console.log('[Viewer] No material on spark, skipping reveal shader');
+      return;
+    }
+
+    // Add uniforms
+    mat.uniforms.uRevealRadius = { value: 0.0 };     // 0 = hidden, 1 = fully visible
+    mat.uniforms.uRevealCenter = { value: new THREE.Vector3(0, 0, 0) };
+    mat.uniforms.uRevealMaxDist = { value: 1.0 };     // Max distance in splat space
+    mat.uniforms.uRevealActive = { value: 0.0 };      // 0 = off, 1 = on
+
+    // Patch vertex shader: compute distance from splat center to reveal center
+    let vs = mat.vertexShader;
+    // Add varying after the existing outputs
+    vs = vs.replace(
+      'flat out float adjustedStdDev;',
+      'flat out float adjustedStdDev;\nout float vRevealDist;'
+    );
+    // Add uniforms
+    vs = vs.replace(
+      'uniform float focalAdjustment;',
+      'uniform float focalAdjustment;\nuniform vec3 uRevealCenter;\nuniform float uRevealMaxDist;\nuniform float uRevealActive;'
+    );
+    // Compute distance after center is unpacked (before early returns that use center)
+    // Insert right after "vec3 viewCenter =" line, using the local 'center' variable
+    vs = vs.replace(
+      'vec3 viewCenter = (!enableCovSplats ? quatVec(renderToViewQuat, center) : (renderToViewBasis * center)) + renderToViewPos;',
+      'vRevealDist = length(center - uRevealCenter) / uRevealMaxDist;\nvec3 viewCenter = (!enableCovSplats ? quatVec(renderToViewQuat, center) : (renderToViewBasis * center)) + renderToViewPos;'
+    );
+    mat.vertexShader = vs;
+
+    // Patch fragment shader: discard splats beyond reveal radius, add glow at edge
+    let fs = mat.fragmentShader;
+    // Add uniforms and varying (fragment shader doesn't have focalAdjustment)
+    fs = fs.replace(
+      'flat in float adjustedStdDev;',
+      'flat in float adjustedStdDev;\nin float vRevealDist;\nuniform float uRevealRadius;\nuniform float uRevealActive;'
+    );
+    // Insert reveal logic right after the z2 discard, before alpha computation
+    fs = fs.replace(
+      'if (rgba.a < minAlpha) {\n        discard;\n    }',
+      'if (uRevealActive > 0.5) {\n        float dist = vRevealDist;\n        float radius = uRevealRadius;\n        float glowWidth = 0.08;\n        if (dist > radius + glowWidth) {\n            discard;\n        }\n        if (dist > radius) {\n            float glow = 1.0 - (dist - radius) / glowWidth;\n            rgba.a *= glow * glow;\n            rgba.rgb += vec3(0.15, 0.4, 0.6) * glow;\n        }\n    }\n    if (rgba.a < minAlpha) {\n        discard;\n    }'
+    );
+    mat.fragmentShader = fs;
+
+    mat.needsUpdate = true;
+    console.log('[Viewer] Reveal shader patched');
+  },
+
+  /**
+   * Play the sonar reveal + camera dolly animation.
+   * - Splat reveal: radius expands from 0 to 1 (center → outward)
+   * - Camera: starts pulled back, dollies to final position
+   * - Duration: ~2.5 seconds
+   */
+  playRevealAnimation(finalCameraPos, finalTarget) {
+    if (!this.spark?.material?.uniforms?.uRevealRadius) {
+      console.log('[Viewer] Reveal shader not available, skipping animation');
+      return;
+    }
+
+    const mat = this.spark.material;
+    const uniforms = mat.uniforms;
+
+    // Compute model center and max distance in splat local space
+    try {
+      const localBox = this.splat.getBoundingBox();
+      if (localBox) {
+        const center = localBox.getCenter(new THREE.Vector3());
+        const size = localBox.getSize(new THREE.Vector3());
+        const maxDist = size.length() / 2;
+        uniforms.uRevealCenter.value.copy(center);
+        uniforms.uRevealMaxDist.value = maxDist * 0.6; // Scale so reveal reaches edges
+      }
+    } catch (e) {
+      console.log('[Viewer] Could not get bounding box for reveal:', e.message);
+    }
+
+    // Activate reveal
+    uniforms.uRevealActive.value = 1.0;
+    uniforms.uRevealRadius.value = 0.0;
+
+    // Camera animation: start from a pulled-back position
+    const startPos = finalCameraPos.clone();
+    const startTarget = finalTarget.clone();
+    // Pull camera back along view direction
+    const viewDir = new THREE.Vector3().subVectors(finalCameraPos, finalTarget).normalize();
+    const pullback = viewDir.multiplyScalar(3.0); // 3 units back
+    startPos.add(pullback);
+
+    this.camera.position.copy(startPos);
+    this.controls.target.copy(startTarget);
+    this.controls.update();
+
+    // Disable user input during animation
+    this.controls.enableRotate = false;
+    this.controls.enableZoom = false;
+    this.controls.enablePan = false;
+
+    const duration = 2500; // ms
+    const startTime = performance.now();
+
+    const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+    const easeInOutQuad = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+    const animateReveal = () => {
+      const elapsed = performance.now() - startTime;
+      const t = Math.min(elapsed / duration, 1.0);
+
+      // Reveal radius: ease-out (fast start, slow finish for dramatic edge)
+      const revealT = easeOutCubic(t);
+      uniforms.uRevealRadius.value = revealT;
+
+      // Camera dolly: ease-in-out (smooth acceleration/deceleration)
+      const camT = easeInOutQuad(t);
+      this.camera.position.lerpVectors(startPos, finalCameraPos, camT);
+      this.controls.target.lerpVectors(startTarget, finalTarget, camT);
+      this.controls.update();
+
+      if (t < 1.0) {
+        requestAnimationFrame(animateReveal);
+      } else {
+        // Animation complete: deactivate reveal, restore controls
+        uniforms.uRevealActive.value = 0.0;
+        uniforms.uRevealRadius.value = 1.0;
+        this.controls.enableRotate = true;
+        this.controls.enableZoom = true;
+        this.controls.enablePan = true;
+        console.log('[Viewer] Reveal animation complete');
+      }
+    };
+
+    requestAnimationFrame(animateReveal);
   },
 
   /**
