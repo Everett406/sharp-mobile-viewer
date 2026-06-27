@@ -54,11 +54,14 @@ const Viewer = {
     keyframes: [],       // [{position: [x,y,z], target: [x,y,z], fov: float, duration: float}]
     previewing: false,
     recording: false,
+    fps: 30,
+    resolution: 1080,    // short-side pixels: 720, 1080, 1440
     _savedAspect: null,
     _savedFov: null,
     _animStartTime: 0,
     _mediaRecorder: null,
     _recordChunks: [],
+    _frameRect: null,    // {x, y, w, h} in CSS pixels (for viewport/scissor)
   },
   // Aspect ratio presets: ratio string → {w, h} and export resolution
   ASPECT_PRESETS: {
@@ -214,15 +217,13 @@ const Viewer = {
           const rw = entry.contentRect.width;
           const rh = entry.contentRect.height;
           if (rw < 10 || rh < 10) return;
-          // In cinematic mode, camera aspect is controlled by frame ratio
-          if (!this.cinematic.active) {
+          if (this.cinematic.active) {
+            // In cinematic mode: only update frame rect, don't touch renderer size
+            this._applyCinematicAspect();
+          } else {
             this.camera.aspect = rw / rh;
             this.camera.updateProjectionMatrix();
-          }
-          this.renderer.setSize(rw, rh, false);
-          // Update cinematic frame overlay if active
-          if (this.cinematic.active) {
-            this._applyCinematicAspect();
+            this.renderer.setSize(rw, rh, false);
           }
         }
       });
@@ -959,7 +960,26 @@ const Viewer = {
       }
 
       if (this.renderer && this.scene && this.camera) {
-        this.renderer.render(this.scene, this.camera);
+        // In cinematic mode: render only within the frame area using viewport/scissor
+        if (this.cinematic.active && this.cinematic._frameRect && !this.cinematic.recording) {
+          const rect = this.cinematic._frameRect;
+          const dpr = this.renderer.getPixelRatio();
+          const canvasH = this.renderer.domElement.height;
+          // WebGL Y is bottom-up
+          const vpX = rect.x * dpr;
+          const vpY = canvasH - (rect.y + rect.h) * dpr;
+          const vpW = rect.w * dpr;
+          const vpH = rect.h * dpr;
+          this.renderer.setViewport(vpX, vpY, vpW, vpH);
+          this.renderer.setScissor(vpX, vpY, vpW, vpH);
+          this.renderer.setScissorTest(true);
+          this.renderer.render(this.scene, this.camera);
+          this.renderer.setScissorTest(false);
+          // Reset viewport to full for next frame's clear
+          this.renderer.setViewport(0, 0, this.renderer.domElement.width, this.renderer.domElement.height);
+        } else {
+          this.renderer.render(this.scene, this.camera);
+        }
       }
 
       this.fpsCounter.frames++;
@@ -1343,17 +1363,20 @@ const Viewer = {
     if (!this.cinematic.active) return;
     this.stopPreview();
     this.cinematic.active = false;
+    this.cinematic._frameRect = null;
     // Restore camera
     if (this.camera && this.cinematic._savedAspect != null) {
       this.camera.aspect = this.cinematic._savedAspect;
       this.camera.fov = this.cinematic._savedFov;
       this.camera.updateProjectionMatrix();
     }
-    // Restore canvas size if it was changed for export
-    if (this._savedCanvasSize) {
-      const { w, h } = this._savedCanvasSize;
-      this.renderer.setSize(w, h, false);
-      this._savedCanvasSize = null;
+    // Restore renderer size to container
+    if (this.container) {
+      const cw = this.container.clientWidth;
+      const ch = this.container.clientHeight;
+      this.renderer.setSize(cw, ch, false);
+      this.camera.aspect = cw / ch;
+      this.camera.updateProjectionMatrix();
     }
     console.log('[Viewer] Cinematic mode exited');
   },
@@ -1377,6 +1400,24 @@ const Viewer = {
     const containerAspect = containerW / containerH;
     const targetAspect = preset.w / preset.h;
 
+    // Frame size with 90% padding (don't touch edges)
+    const padding = 0.9;
+    let frameW, frameH;
+    if (targetAspect > containerAspect) {
+      // Frame is wider → fit to width
+      frameW = containerW * padding;
+      frameH = frameW / targetAspect;
+    } else {
+      // Frame is taller → fit to height
+      frameH = containerH * padding;
+      frameW = frameH * targetAspect;
+    }
+    const frameX = (containerW - frameW) / 2;
+    const frameY = (containerH - frameH) / 2;
+
+    // Store frame rect for viewport/scissor in render loop
+    this.cinematic._frameRect = { x: frameX, y: frameY, w: frameW, h: frameH };
+
     // Camera aspect matches the frame ratio for WYSIWYG
     this.camera.aspect = targetAspect;
     this.camera.updateProjectionMatrix();
@@ -1384,21 +1425,40 @@ const Viewer = {
     // Update frame overlay CSS
     const frame = document.getElementById('cinematic-frame');
     if (frame) {
-      let frameW, frameH;
-      if (targetAspect > containerAspect) {
-        // Frame is wider than container → fit to width
-        frameW = containerW;
-        frameH = containerW / targetAspect;
-      } else {
-        // Frame is taller → fit to height
-        frameH = containerH;
-        frameW = containerH * targetAspect;
-      }
       frame.style.width = `${frameW}px`;
       frame.style.height = `${frameH}px`;
-      frame.style.left = `${(containerW - frameW) / 2}px`;
-      frame.style.top = `${(containerH - frameH) / 2}px`;
+      frame.style.left = `${frameX}px`;
+      frame.style.top = `${frameY}px`;
     }
+  },
+
+  /**
+   * Get export dimensions based on aspect ratio + resolution setting.
+   */
+  getExportDimensions() {
+    const preset = this.ASPECT_PRESETS[this.cinematic.aspectRatio];
+    if (!preset) return { w: 1920, h: 1080 };
+    const shortSide = this.cinematic.resolution;
+    const aspect = preset.w / preset.h;
+    if (aspect >= 1) {
+      return { w: Math.round(shortSide * aspect), h: shortSide };
+    } else {
+      return { w: shortSide, h: Math.round(shortSide / aspect) };
+    }
+  },
+
+  /**
+   * Set FPS for video export.
+   */
+  setFps(fps) {
+    this.cinematic.fps = fps;
+  },
+
+  /**
+   * Set export resolution (short-side pixels).
+   */
+  setResolution(res) {
+    this.cinematic.resolution = res;
   },
 
   /**
@@ -1632,12 +1692,15 @@ const Viewer = {
       return;
     }
 
-    // Pick best supported mime type
+    // Pick best supported mime type (prefer MP4/H.264 for compatibility)
     const mimeTypes = [
+      'video/mp4;codecs=h264,aac',
+      'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+      'video/mp4;codecs=avc1',
+      'video/mp4',
       'video/webm;codecs=vp9',
       'video/webm;codecs=vp8',
       'video/webm',
-      'video/mp4',
     ];
     let mimeType = '';
     for (const mt of mimeTypes) {
@@ -1651,15 +1714,20 @@ const Viewer = {
       return;
     }
 
-    console.log('[Viewer] Export video:', preset.exportW, 'x', preset.exportH, mimeType);
+    // Calculate export dimensions from resolution setting
+    const exportDims = this.getExportDimensions();
+    const fps = this.cinematic.fps || 30;
+
+    console.log('[Viewer] Export video:', exportDims.w, 'x', exportDims.h, mimeType, fps, 'fps');
 
     // Save current canvas size and resize for export
-    const origW = this.container.clientWidth;
-    const origH = this.container.clientHeight;
-    this._savedCanvasSize = { w: origW, h: origH };
+    const origW = this.renderer.domElement.width;
+    const origH = this.renderer.domElement.height;
+    const origDpr = this.renderer.getPixelRatio();
 
-    // Resize renderer drawing buffer (false = don't update CSS style)
-    this.renderer.setSize(preset.exportW, preset.exportH, false);
+    // Resize renderer drawing buffer to export resolution (false = don't update CSS)
+    this.renderer.setPixelRatio(1);
+    this.renderer.setSize(exportDims.w, exportDims.h, false);
     this.camera.aspect = preset.w / preset.h;
     this.camera.updateProjectionMatrix();
 
@@ -1667,13 +1735,14 @@ const Viewer = {
     await new Promise(r => requestAnimationFrame(r));
 
     // Setup MediaRecorder
-    const fps = 30;
     const stream = this.canvas.captureStream(fps);
     this.cinematic._recordChunks = [];
 
+    // Bitrate scales with resolution
+    const bitrate = exportDims.w * exportDims.h * fps * 0.1;  // ~0.1 bits per pixel
     const recorder = new MediaRecorder(stream, {
       mimeType,
-      videoBitsPerSecond: 8_000_000,  // 8 Mbps for high quality
+      videoBitsPerSecond: Math.min(Math.max(bitrate, 2_000_000), 16_000_000),
     });
     this.cinematic._mediaRecorder = recorder;
 
@@ -1688,20 +1757,24 @@ const Viewer = {
       const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
       console.log('[Viewer] Video recorded:', blob.size, 'bytes');
 
-      // Restore canvas size
-      this.renderer.setSize(origW, origH, false);
-      this.camera.aspect = this.cinematic._savedAspect || (origW / origH);
-      this.camera.fov = this.cinematic._savedFov || this.camera.fov;
-      this.camera.updateProjectionMatrix();
-      this._savedCanvasSize = null;
+      // Restore renderer to original state
+      this.renderer.setPixelRatio(origDpr);
+      this.renderer.setSize(origW / origDpr, origH / origDpr, false);
+      // Restore cinematic frame
+      if (this.cinematic.active) {
+        this._applyCinematicAspect();
+      }
 
       if (onComplete) onComplete(blob, ext);
     };
 
     recorder.onerror = (e) => {
       console.error('[Viewer] MediaRecorder error:', e);
-      this.renderer.setSize(origW, origH, false);
-      this._savedCanvasSize = null;
+      this.renderer.setPixelRatio(origDpr);
+      this.renderer.setSize(origW / origDpr, origH / origDpr, false);
+      if (this.cinematic.active) {
+        this._applyCinematicAspect();
+      }
       if (onError) onError('录制失败');
     };
 
@@ -1730,7 +1803,7 @@ const Viewer = {
         this.camera.fov = state.fov;
         this.camera.updateProjectionMatrix();
         this.controls.update();
-        // Explicit render to ensure frame is captured
+        // Explicit render to ensure frame is captured (full canvas, no viewport)
         this.renderer.render(this.scene, this.camera);
         if (onProgress) onProgress(elapsed / totalDuration);
         requestAnimationFrame(animate);

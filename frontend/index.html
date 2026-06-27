@@ -338,7 +338,7 @@
           </div>
           <h1 style="font-family:var(--font-display);font-weight:500;font-size:28px;color:var(--foreground);margin:0 0 6px 0">SharpView</h1>
           <div class="flex items-center gap-2 mb-3">
-            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.13.0</span>
+            <span id="about-version" style="font-family:var(--font-sans);font-weight:400;font-size:13px;color:var(--muted-foreground)">v0.13.1</span>
             <span class="badge muted" style="background:var(--brand-100);color:var(--brand-700);font-size:11px;min-height:22px;padding:0 8px">最新版本</span>
           </div>
           <p style="font-family:var(--font-serif);font-weight:400;font-size:14px;color:var(--secondary-foreground);font-style:italic;margin:0;text-align:center">将照片转化为 3D 高斯泼溅场景</p>
@@ -712,9 +712,9 @@
     <!-- ═══════════════════════════════════════════════════════
          Overlay: 运镜面板 (Cinematic Panel)
          ═══════════════════════════════════════════════════════ -->
-    <div id="cinematic-panel" class="fixed inset-0 z-50" style="display:none">
+    <div id="cinematic-panel" class="fixed inset-0 z-50" style="display:none;pointer-events:none">
       <!-- Top bar -->
-      <header class="flex items-center justify-between px-4 h-11 absolute top-0 left-0 right-0 z-20" style="background:rgba(0,0,0,0.5);backdrop-filter:blur(8px)">
+      <header class="flex items-center justify-between px-4 h-11 absolute top-0 left-0 right-0 z-20" style="background:rgba(0,0,0,0.5);backdrop-filter:blur(8px);pointer-events:auto">
         <button id="cinematic-back" class="inline-flex items-center justify-center w-8 h-8 rounded-lg" style="color:#fff;background:none;border:none;cursor:pointer">
           <i data-lucide="arrow-left" class="w-5 h-5"></i>
         </button>
@@ -729,7 +729,26 @@
         </select>
       </header>
       <!-- Bottom control panel -->
-      <div class="absolute bottom-0 left-0 right-0 z-20" style="background:rgba(0,0,0,0.6);backdrop-filter:blur(12px);padding:12px 16px 24px">
+      <div class="absolute bottom-0 left-0 right-0 z-20" style="background:rgba(0,0,0,0.6);backdrop-filter:blur(12px);padding:12px 16px 24px;pointer-events:auto">
+        <!-- Export settings row -->
+        <div class="flex items-center gap-3 mb-3">
+          <div class="flex items-center gap-1">
+            <span style="font:400 11px var(--font-sans);color:rgba(255,255,255,0.5)">帧率</span>
+            <select id="cinematic-fps" style="background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:2px 6px;font:500 11px var(--font-mono);cursor:pointer">
+              <option value="24">24</option>
+              <option value="30" selected>30</option>
+              <option value="60">60</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-1">
+            <span style="font:400 11px var(--font-sans);color:rgba(255,255,255,0.5)">分辨率</span>
+            <select id="cinematic-res" style="background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:2px 6px;font:500 11px var(--font-mono);cursor:pointer">
+              <option value="720">720p</option>
+              <option value="1080" selected>1080p</option>
+              <option value="1440">1440p</option>
+            </select>
+          </div>
+        </div>
         <!-- Progress bar -->
         <div id="cinematic-progress-container" style="display:none;margin-bottom:12px">
           <div style="height:4px;background:rgba(255,255,255,0.15);border-radius:2px;overflow:hidden">
@@ -793,8 +812,8 @@
 
   </div>
 
-  <script src="scripts/github.js?v=123" defer></script>
-  <script src="scripts/viewer-bundle.js?v=125" defer></script>
-  <script src="scripts/app.js?v=123" defer></script>
+  <script src="scripts/github.js?v=124" defer></script>
+  <script src="scripts/viewer-bundle.js?v=126" defer></script>
+  <script src="scripts/app.js?v=124" defer></script>
 </body>
 </html>
