@@ -512,7 +512,8 @@ const Viewer = {
         'in float vRevealDist;\nuniform float uRevealRadius1;\nuniform float uRevealRadius2;\nuniform float uRevealActive;\nuniform float uRevealFade;\nvoid main() {'
       );
       // Insert reveal logic before minAlpha discard
-      // z2 and adjustedStdDev are already computed above in the shader
+      // z2 = dot(vSplatUv, vSplatUv) in range [0, ~adjustedStdDev²]
+      // For point cloud: use fixed z2 threshold (small hard dot, independent of splat size)
       fs = fs.replace(
         'if (rgba.a < minAlpha) {',
         'if (uRevealActive > 0.5) {\n' +
@@ -520,9 +521,8 @@ const Viewer = {
         '            float r1 = uRevealRadius1;\n' +
         '            float r2 = uRevealRadius2;\n' +
         '            float gw = 0.05;\n' +
-        '            float fullSplat = adjustedStdDev * adjustedStdDev;\n' +
-        '            float pointSize = 0.12; // Show only center 12% → looks like a hard point\n' +
-        '            float pointSplat = pointSize * pointSize * fullSplat;\n' +
+        '            // Fixed threshold for point cloud dots (independent of splat size)\n' +
+        '            float pointThresh = 0.03;\n' +
         '\n' +
         '            // Beyond radius1 + glow: completely hidden\n' +
         '            if (d > r1 + gw) {\n' +
@@ -531,34 +531,34 @@ const Viewer = {
         '\n' +
         '            // Pass 1 region: inside r1, outside r2+gw → point cloud (small hard dots)\n' +
         '            if (d <= r1 && d > r2 + gw) {\n' +
-        '                if (z2 > pointSplat) { discard; }\n' +
+        '                if (z2 > pointThresh) { discard; }\n' +
         '                float gray = dot(rgba.rgb, vec3(0.3, 0.59, 0.11));\n' +
-        '                rgba.rgb = vec3(gray) * 1.4;\n' +
+        '                rgba.rgb = vec3(gray) * 1.3;\n' +
         '                rgba.a = 1.0;\n' +
         '            }\n' +
         '\n' +
-        '            // Glow edge pass 1 (cyan, narrow) — point cloud style dots\n' +
+        '            // Glow edge pass 1 (cyan, narrow) — point cloud dots\n' +
         '            if (d > r1 && d <= r1 + gw) {\n' +
         '                float g1 = 1.0 - (d - r1) / gw;\n' +
-        '                if (z2 > pointSplat) { discard; }\n' +
+        '                if (z2 > pointThresh) { discard; }\n' +
         '                float gray = dot(rgba.rgb, vec3(0.3, 0.59, 0.11));\n' +
-        '                rgba.rgb = vec3(gray) * 1.4 + vec3(0.2, 0.6, 0.9) * g1;\n' +
-        '                rgba.a = g1 * uRevealFade;\n' +
+        '                rgba.rgb = vec3(gray) * 1.3 + vec3(0.2, 0.6, 0.9) * g1;\n' +
+        '                rgba.a = g1;\n' +
         '            }\n' +
         '\n' +
-        '            // Glow edge pass 2 (orange) — transition point cloud → full splat\n' +
+        '            // Glow edge pass 2 (orange) — expand from point to full splat\n' +
         '            if (d > r2 && d <= r2 + gw) {\n' +
         '                float g2 = 1.0 - (d - r2) / gw;\n' +
-        '                // Expand from small point to full splat at the color edge\n' +
-        '                float expandSize = mix(pointSize, 1.0, g2);\n' +
-        '                if (z2 > expandSize * expandSize * fullSplat) { discard; }\n' +
+        '                // Expand threshold from point to full splat as color arrives\n' +
+        '                float expandThresh = mix(pointThresh, adjustedStdDev * adjustedStdDev, g2);\n' +
+        '                if (z2 > expandThresh) { discard; }\n' +
         '                float gray = dot(rgba.rgb, vec3(0.3, 0.59, 0.11));\n' +
-        '                rgba.rgb = mix(vec3(gray) * 1.4, rgba.rgb, g2);\n' +
+        '                rgba.rgb = mix(vec3(gray) * 1.3, rgba.rgb, g2);\n' +
         '                rgba.rgb += vec3(0.9, 0.5, 0.15) * g2 * 0.7;\n' +
-        '                rgba.a = mix(g2, 1.0, g2);\n' +
+        '                rgba.a = mix(g2 * 0.8, 1.0, g2);\n' +
         '            }\n' +
         '\n' +
-        '            // Inside r2: full normal splat, NO modification (let shader handle normally)\n' +
+        '            // Inside r2: full normal splat, NO modification\n' +
         '        }\n' +
         '        if (rgba.a < minAlpha) {'
       );
@@ -612,7 +612,7 @@ const Viewer = {
           const size = localBox.getSize(new THREE.Vector3());
           const maxDist = size.length() / 2;
           u().uRevealCenter.value.copy(center);
-          u().uRevealMaxDist.value = Math.max(maxDist, 0.001);
+          u().uRevealMaxDist.value = Math.max(maxDist * 1.1, 0.001); // 10% margin
           console.log('[Viewer] Reveal center:', center.toArray(), 'maxDist:', maxDist);
         }
       } catch (e) {
@@ -662,11 +662,21 @@ const Viewer = {
       this.controls.target.lerpVectors(startTarget, finalTarget, camEased);
       this.controls.update();
 
-      // Fade-out phase: smoothly reduce effect
+      // Fade-out phase: rapidly expand both radii to cover ALL splats
+      // The glow edges sweep outward, revealing remaining splats through the
+      // normal pipeline (point → color → full). Once everything is covered,
+      // turn off uRevealActive.
       if (elapsed > fadeStart) {
         const fadeT = Math.min((elapsed - fadeStart) / fadeDuration, 1.0);
-        if (revealActive && u()?.uRevealFade) {
-          u().uRevealFade.value = 1.0 - fadeT;
+        if (revealActive && u()?.uRevealRadius1) {
+          // Expand radii: quadratic acceleration for fast but smooth sweep
+          const expand = fadeT * fadeT * 3.0;  // 1.2 → 4.2 over 500ms
+          u().uRevealRadius1.value = 1.2 + expand;
+          u().uRevealRadius2.value = 1.2 + expand;
+          // Only deactivate at the very end when all splats are covered
+          if (fadeT > 0.98) {
+            u().uRevealActive.value = 0.0;
+          }
         }
       }
 
