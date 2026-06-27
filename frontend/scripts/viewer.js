@@ -919,38 +919,78 @@ const Viewer = {
   },
 
   /**
-   * Free mode zoom: translate camera + target along look direction.
-   * This gives constant-speed movement (no slowdown near target like dolly).
+   * Free mode two-finger: pinch = translate forward/back, drag = pan.
    */
   _setupFreeModeZoom() {
     let prevPinchDist = 0;
+    let prevMidX = 0, prevMidY = 0;
     const tmpDir = new THREE.Vector3();
+    const panVec = new THREE.Vector3();
+    const rightVec = new THREE.Vector3();
+    const upVec = new THREE.Vector3();
 
     const getPinchDist = (e) => Math.hypot(
       e.touches[0].clientX - e.touches[1].clientX,
       e.touches[0].clientY - e.touches[1].clientY
     );
+    const getMid = (e) => ({
+      x: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+      y: (e.touches[0].clientY + e.touches[1].clientY) / 2,
+    });
 
     this._freeTouchStart = (e) => {
-      if (e.touches.length === 2) prevPinchDist = getPinchDist(e);
+      if (e.touches.length === 2) {
+        prevPinchDist = getPinchDist(e);
+        const m = getMid(e);
+        prevMidX = m.x;
+        prevMidY = m.y;
+      }
     };
 
     this._freeTouchMove = (e) => {
       if (e.touches.length !== 2) return;
       e.preventDefault();
+
       const dist = getPinchDist(e);
+      const m = getMid(e);
+
+      // Pinch: translate camera + target along look direction
       if (prevPinchDist > 0) {
         const delta = dist - prevPinchDist;
-        // Translate camera and target along look direction
         this.camera.getWorldDirection(tmpDir);
         const speed = delta * 0.004;
         this.camera.position.addScaledVector(tmpDir, speed);
         this.controls.target.addScaledVector(tmpDir, speed);
       }
+
+      // Pan: move camera + target perpendicular to look direction
+      const dx = m.x - prevMidX;
+      const dy = m.y - prevMidY;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+        // Get camera's right and up vectors in screen space
+        this.camera.getWorldDirection(tmpDir);
+        rightVec.crossVectors(tmpDir, this.camera.up).normalize();
+        upVec.crossVectors(rightVec, tmpDir).normalize();
+
+        const panSpeed = 0.003;
+        // Screen X → camera right, Screen Y → camera up (inverted because screen Y is down)
+        panVec.set(0, 0, 0)
+          .addScaledVector(rightVec, -dx * panSpeed)
+          .addScaledVector(upVec, dy * panSpeed);
+        this.camera.position.add(panVec);
+        this.controls.target.add(panVec);
+      }
+
       prevPinchDist = dist;
+      prevMidX = m.x;
+      prevMidY = m.y;
     };
 
-    this._freeTouchEnd = () => { prevPinchDist = 0; };
+    this._freeTouchEnd = () => {
+      prevPinchDist = 0;
+      prevMidX = 0;
+      prevMidY = 0;
+    };
 
     this._freeWheel = (e) => {
       e.preventDefault();
