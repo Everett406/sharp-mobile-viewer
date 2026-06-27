@@ -1703,11 +1703,80 @@ const Viewer = {
     const origW = this.renderer.domElement.width;
     const origH = this.renderer.domElement.height;
     const origDpr = this.renderer.getPixelRatio();
+    // Save current preview FOV BEFORE any modification
+    const previewFov = this.camera.fov;
+
+    // ── FOV compensation for WYSIWYG export ──
+    // The preview camera aspect = containerW/containerH, FOV = camera.fov.
+    // The frame overlay defines a crop region within the container.
+    // To make the exported video match exactly what's inside the frame:
+    //   - Set export aspect = frame aspect (targetAspect)
+    //   - Scale vertical FOV so the frame's vertical extent fills the export canvas
+    //
+    // In Three.js, vertical FOV is fixed; horizontal extent changes with aspect.
+    // The frame height as fraction of container height tells us how much to zoom.
+    // If frame is shorter than container, we need a NARROWER FOV (zoom in).
+    const containerH = this.container.clientHeight;
+    const containerW = this.container.clientWidth;
+    const frameRect = this.cinematic._frameRect;
+    let exportFov = this.camera.fov;
+    let exportAspect = preset.w / preset.h;
+
+    if (frameRect) {
+      // The frame's vertical extent as fraction of container
+      const vRatio = frameRect.h / containerH;
+      // The frame's horizontal extent as fraction of container
+      const hRatio = frameRect.w / containerW;
+      // Preview camera aspect
+      const previewAspect = containerW / containerH;
+      // Target aspect
+      const targetAspect = preset.w / preset.h;
+
+      // We want the exported image to show exactly what's inside the frame.
+      // The preview renders with vertical FOV = camera.fov over the full container height.
+      // The frame covers vRatio of that height.
+      // To make the frame fill the full export height, we need:
+      //   exportFov = camera.fov * vRatio  (narrower = zoom in)
+      //
+      // But we also need to check horizontal: the frame covers hRatio of container width.
+      // Preview horizontal FOV = 2 * atan(tan(camera.fov/2 * deg2rad) * previewAspect)
+      // Frame horizontal extent = hRatio * that
+      // Export horizontal FOV = 2 * atan(tan(exportFov/2 * deg2rad) * targetAspect)
+      // These must match for consistency.
+
+      // Compute both and pick the one that requires more zoom (smaller FOV)
+      const fovRad = (this.camera.fov * Math.PI) / 180;
+      const halfVFov = fovRad / 2;
+
+      // Vertical: frame fills vRatio of container height
+      const vFovExport = 2 * Math.atan(Math.tan(halfVFov) * vRatio) * (180 / Math.PI);
+
+      // Horizontal: frame fills hRatio of container width
+      // Preview horizontal half-FOV
+      const halfHFovPreview = Math.atan(Math.tan(halfVFov) * previewAspect);
+      // Frame horizontal half-FOV
+      const halfHFovFrame = halfHFovPreview * hRatio;
+      // Export vertical FOV to match this horizontal FOV at target aspect
+      const halfVFovExportFromH = Math.atan(Math.tan(halfHFovFrame) / targetAspect);
+      const vFovExportFromH = 2 * halfVFovExportFromH * (180 / Math.PI);
+
+      // Use the smaller (more zoomed-in) FOV to ensure the frame content fills the export
+      exportFov = Math.min(vFovExport, vFovExportFromH);
+
+      console.log('[Viewer] FOV compensation:', {
+        previewFov: this.camera.fov,
+        exportFov: exportFov.toFixed(2),
+        vRatio, hRatio, previewAspect: previewAspect.toFixed(3), targetAspect: targetAspect.toFixed(3),
+        vFovExport: vFovExport.toFixed(2), vFovExportFromH: vFovExportFromH.toFixed(2),
+      });
+    }
 
     // Resize renderer drawing buffer to export resolution (false = don't update CSS)
     this.renderer.setPixelRatio(1);
     this.renderer.setSize(exportDims.w, exportDims.h, false);
-    this.camera.aspect = preset.w / preset.h;
+    this.camera.aspect = exportAspect;
+    // Store original FOV so animation interpolation uses corrected FOV
+    this.cinematic._exportFovOffset = exportFov;
     this.camera.updateProjectionMatrix();
 
     // Wait one frame for resize to take effect
@@ -1743,11 +1812,14 @@ const Viewer = {
       // Restore renderer to original state
       this.renderer.setPixelRatio(origDpr);
       this.renderer.setSize(origW / origDpr, origH / origDpr, false);
-      // Restore camera aspect to container
+      // Restore camera aspect and FOV to container
       if (this.container) {
         this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
+        this.camera.fov = previewFov;
         this.camera.updateProjectionMatrix();
       }
+      // Clean up export FOV offset
+      this.cinematic._exportFovOffset = null;
       // Restore cinematic frame overlay
       if (this.cinematic.active) {
         this._applyCinematicAspect();
@@ -1765,8 +1837,10 @@ const Viewer = {
       this.renderer.setSize(origW / origDpr, origH / origDpr, false);
       if (this.container) {
         this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
+        this.camera.fov = previewFov;
         this.camera.updateProjectionMatrix();
       }
+      this.cinematic._exportFovOffset = null;
       if (this.cinematic.active) {
         this._applyCinematicAspect();
       }
@@ -1784,6 +1858,13 @@ const Viewer = {
     const totalDuration = this.getTotalDuration();
     const startTime = performance.now();
 
+    // FOV compensation ratio: export FOV relative to preview FOV
+    // This ratio is applied to every interpolated keyframe FOV during export
+    // so the zoom level stays consistent with what was framed in preview.
+    const fovCompensationRatio = (this.cinematic._exportFovOffset && previewFov)
+      ? this.cinematic._exportFovOffset / previewFov
+      : 1.0;
+
     const animate = () => {
       if (!this.cinematic.recording) {
         recorder.stop();
@@ -1795,7 +1876,8 @@ const Viewer = {
       if (state && elapsed < totalDuration) {
         this.camera.position.set(state.position.x, state.position.y, state.position.z);
         this.controls.target.set(state.target.x, state.target.y, state.target.z);
-        this.camera.fov = state.fov;
+        // Apply FOV compensation: scale interpolated FOV by the compensation ratio
+        this.camera.fov = state.fov * fovCompensationRatio;
         this.camera.updateProjectionMatrix();
         this.controls.update();
         // Explicit render to ensure frame is captured (full canvas, no viewport)
@@ -1807,7 +1889,7 @@ const Viewer = {
         const last = kfs[kfs.length - 1];
         this.camera.position.fromArray(last.position);
         this.controls.target.fromArray(last.target);
-        this.camera.fov = last.fov;
+        this.camera.fov = last.fov * fovCompensationRatio;
         this.camera.updateProjectionMatrix();
         this.controls.update();
         this.renderer.render(this.scene, this.camera);
