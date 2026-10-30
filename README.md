@@ -1,9 +1,9 @@
----
 
 > [!NOTE]
 > **本仓库已迁移至 Gitee**：<https://gitee.com/Everett5678/sharp-mobile-viewer>
 > GitHub 端仅作只读归档，新代码请推送到 Gitee。
 
+---
 # SharpView
 
 > 将照片转化为 3D 高斯泼溅场景的 Android App
