@@ -56,7 +56,7 @@ SharpView 基于 Apple 开源的 [SHARP](https://github.com/apple/ml-sharp) 模�
 
 ```bash
 # 克隆仓库
-git clone https://github.com/Everett406/sharp-mobile-viewer.git
+git clone https://gitee.com/Everett5678/sharp-mobile-viewer.git
 cd sharp-mobile-viewer
 
 # 安装依赖
